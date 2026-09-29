@@ -1,0 +1,17 @@
+# 统一按 LF 存储，避免 Linux/macOS 上克隆时整仓 diff。
+* text=auto eol=lf
+
+# Windows 批处理必须是 CRLF，否则 cmd.exe 的标签跳转可能出错
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制资源不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.jar binary
+*.ttc binary
+*.zip binary
+*.msi binary
+*.exe binary
