@@ -35,18 +35,20 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 
 ## 下载与安装
 
-从本仓库的 [Releases](../../releases) 下载最新的 `NeriPlayer-1.4.7.msi`，然后：
+从本仓库的 [Releases](../../releases) 下载，三种形式任选：
 
-```powershell
-msiexec /i NeriPlayer-1.4.7.msi
-```
+| 文件 | 说明 |
+| --- | --- |
+| `NeriPlayer-1.4.7.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
+| `NeriPlayer-1.4.7.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.4.7.msi` |
+| `NeriPlayer-1.4.7-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
 
-也可以直接双击 MSI；安装完成后从开始菜单启动「NeriPlayer」。
+安装完成后从开始菜单启动「NeriPlayer」。
 
 - 安装包内置 jlink 运行时，终端用户**不需要**安装 JDK。
 - **每用户安装**：默认只给当前用户安装（`perUserInstall = true`），不需要管理员权限；安装向导可以自选安装目录
   （`dirChooser = true`），并创建开始菜单快捷方式与 `NeriPlayer` 菜单分组。
-- **升级**：MSI 使用固定的 `upgradeUuid`，直接安装新版本即可覆盖升级，不会新旧版本并存。
+- **升级**：MSI 与 EXE 都使用固定的 `upgradeUuid`，直接安装新版本即可覆盖升级，不会新旧版本并存。
 - **免安装版（portable）**：`gradlew createDistributable` 会产出
   `build\compose\binaries\main\app\NeriPlayer\`，里面是自带运行时的完整应用目录 —— 整个目录拷到哪都能跑
   （双击其中的 `NeriPlayer.exe`）。打成 zip 分发即可，不写注册表，删掉目录就等于卸载。
@@ -54,6 +56,10 @@ msiexec /i NeriPlayer-1.4.7.msi
   `NeriPlayer-windows-portable.zip` 作为构建工件上传。
   它是标准的 GitHub Actions 工作流，启用方式：把该文件移动到 `.github/workflows/windows-build.yml`
   并提交（注意推送所用的 Personal Access Token 需要带 `workflow` scope，否则 GitHub 会拒绝这次提交）。
+- **安装包元数据保持英文**：`description` / `vendor` 交给 jpackage 时会写进它的参数文件，
+  而 jpackage 读参数文件用的是系统默认字符集（JDK 17 在中文 Windows 上是 GBK），
+  写中文会乱码并让 jpackage 以 `Input length = 1` 直接失败 —— 所以「程序和功能」里显示的是英文描述，
+  应用界面与本文档仍是中文。
 - **高分屏（HiDPI）**：默认跟随 Windows 的显示缩放（设置 → 系统 → 显示 → 缩放），也可以在
   「设置 → 界面 → 界面缩放」里手动选择 100% ~ 250%；临时指定用
   `$env:NERIPLAYER_UI_SCALE=1.5; .\NeriPlayer.exe`（CMD 里是 `set NERIPLAYER_UI_SCALE=1.5`）。
@@ -91,6 +97,10 @@ msiexec /i NeriPlayer-1.4.7.msi
 首次启动的使用须知（系统缩放 125%，界面跟随系统 DPI）：
 
 ![Windows 使用须知](docs/screenshots/windows-onboarding.png)
+
+安装包产物实际运行的窗口（`packageExe` 生成，标题栏是应用图标）：
+
+![Windows 打包版](docs/screenshots/windows-packaged.png)
 
 ## 功能清单
 
@@ -284,12 +294,15 @@ Windows 把「漫游配置」和「本机数据」分成两棵树，本应用同
 gradlew run                    # 直接运行
 gradlew createDistributable    # 免安装应用目录：build\compose\binaries\main\app\NeriPlayer\
 gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.4.7.msi
+gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.4.7.exe
 ```
 
 - `gradlew` 是批处理包装脚本，在 CMD / PowerShell 里直接写 `gradlew`（或 `.\gradlew.bat`）；
   在 Git Bash 之类的 bash 里用 `./gradlew`。
-- **`packageMsi` 需要 WiX Toolset v3**（提供 `candle.exe` / `light.exe`）并把它的 `bin` 目录加入 `PATH`；
-  缺少时任务会直接失败。只想产出可运行的应用目录就用 `gradlew createDistributable`，**不需要 WiX**，
+- **`packageMsi` / `packageExe` 需要 WiX Toolset v3**（提供 `candle.exe` / `light.exe`）。
+  Compose 插件会自己下载一份到 `build\wix311\`，通常不用手动装；如果它下载失败，
+  再从 <https://github.com/wixtoolset/wix3/releases> 取 `wix314-binaries.zip` 解压并把目录加进 `PATH` 即可。
+  只想产出可运行的应用目录就用 `gradlew createDistributable`，**不需要 WiX**，
   产物自带运行时，压缩成 zip 就是免安装版。
 - 打包时会自动裁剪图标库（`trimMaterialIcons` 任务）：Compose 的 `material-icons-extended` 把一万多个图标
   都编成了独立类（jar 36 MB），而应用真正用到的只有几十个。编译期照常使用完整依赖，打包与运行时替换成
@@ -316,11 +329,11 @@ gradlew syncE2E -DGH_MOCK_BASE=http://127.0.0.1:8765   # 不连云端的 GitHub 
 
 ## 疑难排查（Windows）
 
-### `packageMsi` 报错找不到 `candle.exe` / `light.exe`
+### `packageMsi` / `packageExe` 报错找不到 `candle.exe` / `light.exe`
 
-生成 MSI 需要 **WiX Toolset v3**。安装后把它的 `bin` 目录加入 `PATH`，**重开一个终端**再执行
-（已打开的终端不会看到新的环境变量）。只想本地跑起来或者做绿色版，直接用
-`gradlew createDistributable`，它不依赖 WiX。
+Compose 插件会自动下载 WiX 3.11 到 `build\wix311\`；下载失败时（网络受限）手动装一份：
+从 <https://github.com/wixtoolset/wix3/releases> 下载 `wix314-binaries.zip`，解压后把目录加入 `PATH`，
+重新执行任务即可。不想折腾 WiX 就直接用 `gradlew createDistributable`，它不依赖 WiX。
 
 ### 设置里显示「Java Sound 回退引擎」，或者某些格式放不了、音效不可用
 

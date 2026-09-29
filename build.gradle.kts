@@ -203,13 +203,19 @@ compose.desktop {
             "-XX:G1PeriodicGCInterval=120000",
         )
         nativeDistributions {
-            // Windows 安装包：MSI（对应 Linux 版的 .deb）。
-            // 生成 MSI 需要 WiX Toolset v3（candle.exe / light.exe）在 PATH 中；
-            // 只想要免安装目录的话用 `gradlew createDistributable`（不需要 WiX）。
-            targetFormats(TargetFormat.Msi)
+            // Windows 安装包：MSI 与 EXE（对应 Linux 版的 .deb）。
+            // 两者都由 jpackage 经 WiX Toolset v3（candle.exe / light.exe）生成，
+            // 所以需要 WiX 在 PATH 中；只想要免安装目录的话用 `gradlew createDistributable`
+            // （那条路径不需要 WiX，产出 app\NeriPlayer\NeriPlayer.exe）。
+            targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "NeriPlayer"
             packageVersion = "1.4.7"
-            description = "NeriPlayer 音理音理 — Windows 原生 Compose Desktop 音乐播放器"
+            // 注意：下面这些是交给 jpackage 的安装包元数据，必须保持 ASCII。
+            // jpackage 读取参数文件用的是系统默认字符集（JDK 17 在中文 Windows 上是 GBK），
+            // 而 Compose 插件写入的是 UTF-8 —— description 里一旦有中文就会乱码，
+            // 并且因为多字节序列吞掉了行尾引号，jpackage 会直接以 "Input length = 1" 失败。
+            // 界面、README 仍然是中文，只有这里（控制面板「程序和功能」里显示的描述）用英文。
+            description = "NeriPlayer - native Windows desktop music player (Compose Desktop)"
             vendor = "NeriPlayer Desktop"
             copyright = "GPL-3.0-only"
             licenseFile.set(project.file("packaging/LICENSE"))
