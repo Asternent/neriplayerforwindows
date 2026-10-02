@@ -104,15 +104,21 @@ data class LyricLine(
     val timeMs: Long,
     val text: String,
     val translation: String? = null,
+    /** 音译（罗马音），来自网易云的 romalrc 或第三方歌词源。 */
+    val romanization: String? = null,
 )
 
 data class Lyrics(
     val raw: String = "",
     val lines: List<LyricLine> = emptyList(),
     val translated: List<LyricLine> = emptyList(),
+    val romanized: List<LyricLine> = emptyList(),
     val source: String? = null,
 ) {
     val isEmpty: Boolean get() = lines.isEmpty() && raw.isBlank()
+
+    /** 这份歌词是否带音译，用于决定界面上要不要给「音译」按钮。 */
+    val hasRomanization: Boolean get() = lines.any { !it.romanization.isNullOrBlank() }
 }
 
 /** 在线歌单 / 专辑 摘要。 */

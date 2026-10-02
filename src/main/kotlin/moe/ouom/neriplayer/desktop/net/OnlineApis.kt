@@ -28,7 +28,7 @@ private fun biliDurationMs(duration: String?): Long {
     return totalSeconds * 1000L
 }
 
-private fun normalizeImageUrl(url: String?): String? {
+internal fun normalizeImageUrl(url: String?): String? {
     val value = url?.trim().orEmpty()
     if (value.isEmpty()) return null
     return when {
@@ -183,11 +183,39 @@ class NeteaseApi(private val http: HttpService) {
         )
     }
 
-    fun lyric(id: String): Pair<String, String?>? {
-        val root = getJson("/api/song/lyric?id=$id&lv=1&kv=1&tv=-1") ?: return null
+    /**
+     * 歌词：`rv=1` 让接口额外返回 `romalrc`（罗马音/音译），`tv=-1` 返回 `tlyric`（翻译）。
+     * 两者都可能缺席，缺席时对应字段为 null。
+     */
+    fun lyric(id: String): LyricQueryResult? {
+        val root = getJson("/api/song/lyric?id=$id&lv=1&kv=1&tv=-1&rv=1") ?: return null
         val lyric = root.obj("lrc")?.str("lyric") ?: return null
+        if (lyric.isBlank()) return null
         val translated = root.obj("tlyric")?.str("lyric")
-        return lyric to translated?.takeIf { it.isNotBlank() }
+        val romanized = root.obj("romalrc")?.str("lyric")
+        return LyricQueryResult(
+            raw = lyric,
+            translated = translated?.takeIf { it.isNotBlank() },
+            romanized = romanized?.takeIf { it.isNotBlank() },
+            source = MediaSource.NETEASE.displayName,
+        )
+    }
+
+    /**
+     * 歌曲评论。
+     *
+     * @param offset 已经取到的条数，接口用它做分页。
+     * @return (热门评论, 最新评论, 总数, 是否还有更多)
+     */
+    fun comments(id: String, limit: Int, offset: Int): CommentPage? {
+        val root = getJson("/api/v1/resource/comments/R_SO_4_$id?limit=$limit&offset=$offset") ?: return null
+        val hot = root.array("hotComments")?.objects().orEmpty().mapNotNull { neteaseCommentFromJson(JsonObjectSelf(it)) }
+        val latest = root.array("comments")?.objects().orEmpty().mapNotNull { neteaseCommentFromJson(JsonObjectSelf(it)) }
+        val total = root.long("total")?.toInt() ?: (offset + latest.size)
+        val more = root.bool("more") ?: (offset + latest.size < total)
+        // 第一页才有热门评论，且热门往往与最新重复，这里去重后只保留一次
+        val hotOnly = if (offset == 0) hot.filter { item -> latest.none { it.id == item.id } } else emptyList()
+        return CommentPage(hot = hotOnly, latest = latest, total = total, hasMore = more)
     }
 
     /**
@@ -330,6 +358,7 @@ value class JsonObjectSelf(private val raw: kotlinx.serialization.json.JsonObjec
     fun str(key: String) = raw.str(key)
     fun long(key: String) = raw.long(key)
     fun int(key: String) = raw.int(key)
+    fun bool(key: String) = raw.bool(key)
     fun obj(key: String) = raw.obj(key)?.let(::JsonObjectSelf)
     fun array(key: String) = raw.array(key)
 }
@@ -496,6 +525,39 @@ class BiliApi(private val http: HttpService) {
             val cid = item.long("cid")?.toString() ?: return@mapNotNull null
             cid to cleanBiliText(item.str("part"))
         }
+    }
+
+    /** bvid → aid：评论接口要的是数字 aid，不是 bvid。 */
+    fun aidOf(bvid: String): Long? = runCatching {
+        val text = http.get("https://api.bilibili.com/x/web-interface/view?bvid=$bvid", headers) ?: return@runCatching null
+        NeriJsonParser.parse(text).asObject()?.obj("data")?.long("aid")
+    }.getOrNull()
+
+    /**
+     * 视频评论。
+     *
+     * @param offset 已经取到的条数；B 站按页取，这里换算成页码。
+     * @param sort 2 = 按热度，0 = 按时间。
+     */
+    fun comments(bvid: String, limit: Int, offset: Int, sort: Int = 2): CommentPage? {
+        ensureCookies()
+        val aid = aidOf(bvid) ?: return null
+        val pageSize = limit.coerceAtLeast(1)
+        val page = offset / pageSize + 1
+        val text = http.get(
+            "https://api.bilibili.com/x/v2/reply?type=1&oid=$aid&sort=$sort&pn=$page&ps=$pageSize",
+            headers,
+        ) ?: return null
+        val root = NeriJsonParser.parse(text).asObject() ?: return null
+        if ((root.int("code") ?: -1) != 0) return null
+        val data = root.obj("data")?.let(::JsonObjectSelf)
+        val items = data?.array("replies")?.objects().orEmpty()
+            .mapNotNull { biliCommentFromJson(JsonObjectSelf(it)) }
+        val pageInfo = data?.obj("page")
+        val total = pageInfo?.long("count")?.toInt() ?: items.size
+        val size = pageInfo?.long("size")?.toInt() ?: pageSize
+        val current = pageInfo?.long("num")?.toInt() ?: page
+        return CommentPage(latest = items, total = total, hasMore = current * size < total)
     }
 
     fun audioUrl(bvid: String, cid: String): String? {

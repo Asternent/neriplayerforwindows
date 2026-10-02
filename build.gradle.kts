@@ -11,7 +11,8 @@ plugins {
 }
 
 group = "moe.ouom.neriplayer"
-version = "1.4.7"
+// Windows 版自己的版本号：1.5.0 起加入了来自 Android 原版的歌词音源偏好、音译与评论
+version = "1.5.0"
 
 kotlin {
     jvmToolchain(17)
@@ -209,7 +210,7 @@ compose.desktop {
             // （那条路径不需要 WiX，产出 app\NeriPlayer\NeriPlayer.exe）。
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "NeriPlayer"
-            packageVersion = "1.4.7"
+            packageVersion = "1.5.0"
             // 注意：下面这些是交给 jpackage 的安装包元数据，必须保持 ASCII。
             // jpackage 读取参数文件用的是系统默认字符集（JDK 17 在中文 Windows 上是 GBK），
             // 而 Compose 插件写入的是 UTF-8 —— description 里一旦有中文就会乱码，

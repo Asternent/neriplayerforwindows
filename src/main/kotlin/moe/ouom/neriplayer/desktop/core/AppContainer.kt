@@ -8,6 +8,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
+import moe.ouom.neriplayer.desktop.net.LyricSource
 import moe.ouom.neriplayer.desktop.net.OnlineRepository
 import moe.ouom.neriplayer.desktop.sync.GitHubSyncManager
 import moe.ouom.neriplayer.desktop.sync.SyncConfigStore
@@ -59,7 +60,12 @@ class AppContainer {
     )
     val neteaseLogin = moe.ouom.neriplayer.desktop.net.NeteaseLogin(online.httpService)
     val biliLogin = moe.ouom.neriplayer.desktop.net.BiliLogin(online.httpService)
-    val lyrics = LyricsRepository { song -> online.lyrics(song) }
+    val lyrics = LyricsRepository(
+        remoteProvider = { song -> online.lyrics(song) },
+        preferredProvider = { song, source -> online.preferredLyrics(song, source) },
+        preferredSource = { LyricSource.of(settings.current.lyricSourcePreference) },
+        offsetMs = { source -> settings.current.lyricOffsetMs(source) },
+    )
     val player = PlayerManager(
         settings = settings,
         history = history,
@@ -69,6 +75,12 @@ class AppContainer {
         scope = scope,
         downloads = downloadCatalog,
     )
+
+    /** 改了歌词来源、偏移或音译开关后调用：清空歌词缓存并重新加载当前歌曲。 */
+    fun reloadLyricsAfterSourceChange() {
+        lyrics.invalidateAll()
+        player.reloadLyrics()
+    }
 
     fun bootstrap(scanLibrary: Boolean = true) {
         library.load()

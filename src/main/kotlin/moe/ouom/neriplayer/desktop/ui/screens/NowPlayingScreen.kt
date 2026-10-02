@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.Comment
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.Lyrics
@@ -68,7 +69,14 @@ import moe.ouom.neriplayer.desktop.core.PlaybackState
 import moe.ouom.neriplayer.desktop.core.RepeatMode
 import moe.ouom.neriplayer.desktop.core.currentLyricIndex
 import moe.ouom.neriplayer.desktop.ui.EmptyState
+import moe.ouom.neriplayer.desktop.ui.CommentsPanel
 import moe.ouom.neriplayer.desktop.ui.LyricsPane
+import moe.ouom.neriplayer.desktop.ui.LyricsSecondaryLineMode
+import moe.ouom.neriplayer.desktop.ui.hasLyricPhonetic
+import moe.ouom.neriplayer.desktop.ui.hasLyricTranslation
+import moe.ouom.neriplayer.desktop.ui.nextLyricsSecondaryLineMode
+import moe.ouom.neriplayer.desktop.ui.resolveLyricsSecondaryLineMode
+import moe.ouom.neriplayer.desktop.ui.shortLabel
 import moe.ouom.neriplayer.desktop.ui.PlaybackEffectsPanel
 import moe.ouom.neriplayer.desktop.ui.PlayerProgressBar
 import moe.ouom.neriplayer.desktop.ui.QueuePanel
@@ -114,6 +122,7 @@ fun NowPlayingScreen(
     var showMore by remember { mutableStateOf(false) }
     var showAddToPlaylist by remember { mutableStateOf(false) }
     var showFullLyrics by remember { mutableStateOf(false) }
+    var showComments by remember { mutableStateOf(false) }
 
     LaunchedEffect(externalOverlay) {
         when (externalOverlay) {
@@ -124,6 +133,7 @@ fun NowPlayingScreen(
             "more" -> showMore = true
             "add" -> showAddToPlaylist = true
             "lyrics" -> showFullLyrics = true
+            "comments" -> showComments = true
             // 自动化脚本用：一次性关掉播放页上所有浮层，便于连续截图
             "close" -> {
                 showQueue = false
@@ -133,12 +143,23 @@ fun NowPlayingScreen(
                 showMore = false
                 showAddToPlaylist = false
                 showFullLyrics = false
+                showComments = false
             }
             null -> Unit
         }
     }
 
     val lyricIndex = remember(lyrics, position) { currentLyricIndex(lyrics.lines, position) }
+
+    // 歌词第二行（翻译 / 音译）由两个开关 + 歌词实际内容推导；翻译与音译互斥
+    val hasTranslation = remember(lyrics) { hasLyricTranslation(lyrics.lines) }
+    val hasPhonetic = remember(lyrics) { hasLyricPhonetic(lyrics.lines) }
+    val secondaryLine = resolveLyricsSecondaryLineMode(
+        showSecondaryLine = settings.showLyricTranslation,
+        preferPhonetic = settings.lyricTranslationUsePhonetic,
+        hasTranslation = hasTranslation,
+        hasPhonetic = hasPhonetic,
+    )
 
     Box(modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -215,7 +236,7 @@ fun NowPlayingScreen(
                                     currentIndex = lyricIndex,
                                     loading = lyricsLoading,
                                     fontScale = settings.lyricsFontScale,
-                                    showTranslation = settings.showLyricTranslation,
+                                    secondaryLine = secondaryLine,
                                     onSeekLine = { container.player.seekTo(it) },
                                     modifier = Modifier.fillMaxSize(),
                                 )
@@ -275,6 +296,35 @@ fun NowPlayingScreen(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        // 音译 / 翻译快捷切换：译文与音译互斥，按钮上的字就是当前第二行
+                        if (hasTranslation || hasPhonetic) {
+                            IconButton(onClick = {
+                                val next = nextLyricsSecondaryLineMode(secondaryLine, hasTranslation, hasPhonetic)
+                                container.settings.update { current ->
+                                    current.copy(
+                                        showLyricTranslation = next != LyricsSecondaryLineMode.NONE,
+                                        lyricTranslationUsePhonetic = next == LyricsSecondaryLineMode.PHONETIC,
+                                    )
+                                }
+                            }) {
+                                Text(
+                                    text = secondaryLine.shortLabel(),
+                                    color = if (secondaryLine == LyricsSecondaryLineMode.NONE) {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    },
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                        // 评论：本地歌曲没有可查的评论，按钮就不出现
+                        val commentSource = song?.source
+                        if (commentSource != null && commentSource != MediaSource.LOCAL) {
+                            IconButton(onClick = { showComments = true }) {
+                                Icon(Icons.Outlined.Comment, contentDescription = "评论")
+                            }
+                        }
                         IconButton(onClick = {
                             container.settings.update { current ->
                                 current.copy(lyricsFontScale = (current.lyricsFontScale + 0.1f).coerceAtMost(1.8f))
@@ -293,7 +343,7 @@ fun NowPlayingScreen(
                             currentIndex = lyricIndex,
                             loading = lyricsLoading,
                             fontScale = settings.lyricsFontScale,
-                            showTranslation = settings.showLyricTranslation,
+                            secondaryLine = secondaryLine,
                             onSeekLine = { container.player.seekTo(it) },
                             modifier = if (isWideAppLayout) {
                                 Modifier.fillMaxHeight().widthIn(max = AppLyricsMaxWidth)
@@ -314,6 +364,15 @@ fun NowPlayingScreen(
                     }
                 }
             }
+        }
+
+        val commentSong = song
+        if (showComments && commentSong != null) {
+            CommentsPanel(
+                container = container,
+                song = commentSong,
+                onClose = { showComments = false },
+            )
         }
 
         if (showQueue) {

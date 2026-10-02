@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import moe.ouom.neriplayer.desktop.net.LyricSource
 import java.io.File
 
 /**
@@ -123,7 +124,32 @@ data class AppSettings(
     val equalizerPreset: String = "平直",
     val equalizerBands: List<Float> = List(10) { 0f },
     val lyricsFontScale: Float = 1.0f,
+    /** 显示歌词第二行（翻译或音译）；关掉即只显示原文。 */
     val showLyricTranslation: Boolean = true,
+    /**
+     * 把第二行切换成音译（罗马音）。
+     *
+     * 翻译与音译**互斥**，同一时刻只显示其中一行 —— 与上游 Android 版一致；
+     * 歌词没有音译时会自动回落到翻译。
+     */
+    val lyricTranslationUsePhonetic: Boolean = false,
+    /**
+     * 优先歌词来源：AUTO / NETEASE / KUGOU / LRCLIB / AMLL。
+     * 非 AUTO 时会先去该来源查一次（只对在线歌曲生效，本地歌曲仍以自己的 .lrc 为准）。
+     */
+    val lyricSourcePreference: String = "AUTO",
+    /**
+     * 各来源的默认时间偏移（毫秒，正值 = 歌词提前），叠加在 LRC 自身的 `[offset:]` 之上。
+     *
+     * 默认全为 0：桌面版的位置时钟由 ffmpeg 解码器直接给出，不需要像上游 Android 版
+     * 那样给网易云补 +1000ms。留成 0 也和移植前的桌面行为一致，不会让老用户觉得歌词突然提前。
+     */
+    val lyricOffsetBuiltinMs: Long = 0L,
+    val lyricOffsetLrclibMs: Long = 0L,
+    val lyricOffsetKugouMs: Long = 0L,
+    val lyricOffsetAmllMs: Long = 0L,
+    /** 评论面板每页加载多少条。 */
+    val commentPageSize: Int = 20,
     val coverShowsLyrics: Boolean = true,
     val showNowPlayingTitle: Boolean = true,
     val songTitleMarquee: Boolean = true,
@@ -221,6 +247,18 @@ class SettingsRepository {
         _state.value = next
         store.save(next)
     }
+}
+
+/**
+ * 取某个歌词来源的默认时间偏移（毫秒）。
+ *
+ * 内置来源（网易云 / 哔哩哔哩）与 AUTO 共用一项，因为它们走的是同一条链路。
+ */
+fun AppSettings.lyricOffsetMs(source: LyricSource): Long = when (source) {
+    LyricSource.LRCLIB -> lyricOffsetLrclibMs
+    LyricSource.KUGOU -> lyricOffsetKugouMs
+    LyricSource.AMLL -> lyricOffsetAmllMs
+    LyricSource.AUTO, LyricSource.NETEASE -> lyricOffsetBuiltinMs
 }
 
 /**

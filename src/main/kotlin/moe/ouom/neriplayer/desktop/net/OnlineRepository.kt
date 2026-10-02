@@ -34,6 +34,11 @@ class OnlineRepository(private val http: HttpService = HttpService()) {
     val netease = NeteaseApi(http)
     val bilibili = BiliApi(http)
 
+    // 可选的外部歌词源，由设置里的「优先歌词来源」决定用不用
+    private val lrclib = LrclibProvider(http)
+    private val kugou = KugouProvider(http)
+    private val amll = AmllProvider(http)
+
     suspend fun search(
         source: MediaSource,
         kind: SearchKind,
@@ -82,7 +87,7 @@ class OnlineRepository(private val http: HttpService = HttpService()) {
         }
     }
 
-    suspend fun lyrics(song: Song): Pair<String, String?>? = withContext(Dispatchers.IO) {
+    suspend fun lyrics(song: Song): LyricQueryResult? = withContext(Dispatchers.IO) {
         when (song.source) {
             MediaSource.NETEASE -> song.remoteId?.let { netease.lyric(it) }
             MediaSource.BILIBILI -> null
@@ -91,8 +96,49 @@ class OnlineRepository(private val http: HttpService = HttpService()) {
         }
     }
 
+    /**
+     * 用户指定的优先歌词来源。调用方已经过滤掉 [LyricSource.AUTO]。
+     *
+     * 选「网易云」时，本地歌曲会退回「标题 + 歌手」搜索匹配，
+     * 这样给本地曲库指定歌词源才有意义。
+     */
+    suspend fun preferredLyrics(song: Song, source: LyricSource): LyricQueryResult? = withContext(Dispatchers.IO) {
+        when (source) {
+            LyricSource.LRCLIB -> lrclib.fetch(song)
+            LyricSource.KUGOU -> kugou.fetch(song)
+            LyricSource.AMLL -> amll.fetch(song)
+            LyricSource.NETEASE -> neteaseLyricsFor(song)
+            LyricSource.AUTO -> null
+        }
+    }
+
+    private fun neteaseLyricsFor(song: Song): LyricQueryResult? {
+        if (song.source == MediaSource.NETEASE) {
+            song.remoteId?.takeIf { it.isNotBlank() }?.let { id ->
+                netease.lyric(id)?.let { return it }
+            }
+        }
+        return localLyricFallback(song)
+    }
+
+    /**
+     * 歌曲评论。[offset] 是已经取到的条数，两个平台都按它换算分页。
+     * 本地歌曲没有可查的评论，返回 null。
+     */
+    suspend fun comments(song: Song, offset: Int, limit: Int): CommentPage? = withContext(Dispatchers.IO) {
+        when (song.source) {
+            MediaSource.NETEASE -> song.remoteId?.takeIf { it.isNotBlank() }
+                ?.let { netease.comments(it, limit, offset) }
+
+            MediaSource.BILIBILI -> song.remoteId?.takeIf { it.isNotBlank() }
+                ?.let { bilibili.comments(it, limit, offset) }
+
+            MediaSource.LOCAL, MediaSource.YOUTUBE -> null
+        }
+    }
+
     /** 本地歌曲没有歌词文件时，用「标题 + 歌手」在线补全。 */
-    private fun localLyricFallback(song: Song): Pair<String, String?>? {
+    private fun localLyricFallback(song: Song): LyricQueryResult? {
         val title = song.title.ifBlank { return null }
         val query = if (song.artist.isBlank()) title else "${song.title} ${song.artist}"
         val candidate = netease.searchSongs(query, limit = 5).firstOrNull { match ->

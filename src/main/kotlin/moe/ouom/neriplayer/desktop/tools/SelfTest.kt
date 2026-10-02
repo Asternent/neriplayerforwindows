@@ -10,7 +10,13 @@ import moe.ouom.neriplayer.desktop.core.Song
 import moe.ouom.neriplayer.desktop.core.createAudioEngine
 import moe.ouom.neriplayer.desktop.core.displayName
 import moe.ouom.neriplayer.desktop.net.OnlineRepository
+import moe.ouom.neriplayer.desktop.net.AmllProvider
+import moe.ouom.neriplayer.desktop.net.LyricSource
 import moe.ouom.neriplayer.desktop.net.asObject
+import moe.ouom.neriplayer.desktop.net.formatCommentTime
+import moe.ouom.neriplayer.desktop.ui.LyricsSecondaryLineMode
+import moe.ouom.neriplayer.desktop.ui.nextLyricsSecondaryLineMode
+import moe.ouom.neriplayer.desktop.ui.resolveLyricsSecondaryLineMode
 import kotlinx.coroutines.cancelChildren
 import java.io.File
 
@@ -105,7 +111,10 @@ fun main() = runBlocking {
         val urlResult = online.netease.songUrl(first.remoteId ?: "", "exhigh")
         log("netease song url=${urlResult?.url?.take(60)} level=${urlResult?.level}")
         val lyric = online.netease.lyric(first.remoteId ?: "")
-        log("netease lyric length=${lyric?.first?.length}")
+        log(
+            "netease lyric length=${lyric?.raw?.length} " +
+                "translated=${lyric?.translated?.length ?: 0} romanized=${lyric?.romanized?.length ?: 0}",
+        )
         val bili = online.search(MediaSource.BILIBILI, moe.ouom.neriplayer.desktop.core.SearchKind.SONG, "周杰伦 晴天", 1)
         log("bili search result=${bili.songs.size} first=${bili.songs.firstOrNull()?.displayName()}")
         log("bili debug: ${online.bilibili.debugSearch("周杰伦 晴天")}")
@@ -201,8 +210,147 @@ fun main() = runBlocking {
     checkDownloads(online)
     log("--- 后台与系统控制自检 ---")
     checkBackground()
+    log("--- 歌词来源与评论自检 ---")
+    checkLyricSources(online)
     log("累计失败项：$checksFailed")
     log("DONE")
+}
+
+/**
+ * 歌词来源与评论自检。
+ *
+ * 前半段是纯逻辑（时间偏移、翻译/音译合并、TTML 转换、第二行模式、评论时间格式），
+ * 不依赖网络；后半段会真的去打 LRCLIB / 酷狗 / AMLL / 网易云 / 哔哩哔哩，
+ * 需要联网才能通过。
+ */
+private suspend fun checkLyricSources(online: OnlineRepository) {
+    val lrc = LrcParser
+
+    // ---------------------------------------------------------- 默认偏移
+    val raw = "[00:01.00]第一行\n[00:03.50]第二行\n"
+    check("lrc-offset-zero", lrc.parse(raw).map { it.timeMs } == listOf(1000L, 3500L))
+    check(
+        "lrc-offset-positive-earlier",
+        lrc.parse(raw, extraOffsetMs = 500L).map { it.timeMs } == listOf(500L, 3000L),
+        "${lrc.parse(raw, extraOffsetMs = 500L).map { it.timeMs }}",
+    )
+    check(
+        "lrc-offset-negative-later",
+        lrc.parse(raw, extraOffsetMs = -500L).map { it.timeMs } == listOf(1500L, 4000L),
+        "${lrc.parse(raw, extraOffsetMs = -500L).map { it.timeMs }}",
+    )
+    // 文件自带的 [offset:] 与设置里的默认偏移要叠加，而不是互相覆盖
+    val withFileOffset = lrc.parse("[offset:200]\n[00:01.00]x\n", extraOffsetMs = 300L)
+    check("lrc-offset-stacks", withFileOffset.map { it.timeMs } == listOf(500L), "${withFileOffset.map { it.timeMs }}")
+
+    // ---------------------------------------------------------- 翻译 / 音译合并
+    val base = lrc.parse(raw)
+    val merged = lrc.merge(
+        base,
+        lrc.parse("[00:01.00]翻译一\n"),
+        lrc.parse("[00:01.00]yi\n[00:03.50]er\n"),
+    )
+    check("lrc-merge-translation", merged[0].translation == "翻译一", "${merged[0].translation}")
+    check("lrc-merge-romanization", merged[0].romanization == "yi" && merged[1].romanization == "er")
+    check("lrc-merge-no-cross-talk", merged[1].translation == null && merged[0].romanization != merged[0].translation)
+
+    // ---------------------------------------------------------- AMLL TTML → LRC
+    val ttml = "<tt><body><div>" +
+        "<p begin=\"00:01.737\" end=\"00:06.722\"><span begin=\"00:01.737\">沈</span><span>む</span></p>" +
+        "<p begin=\"01:02.189\" end=\"01:04.033\"><span>鳴る</span><span>&amp;夜</span></p>" +
+        "</div></body></tt>"
+    val ttmlLines = lrc.parse(AmllProvider.parseTtml(ttml))
+    check("amll-ttml-line-count", ttmlLines.size == 2, "${ttmlLines.map { it.timeMs }}")
+    check("amll-ttml-text", ttmlLines.firstOrNull()?.text == "沈む", "${ttmlLines.firstOrNull()?.text}")
+    check("amll-ttml-minutes", ttmlLines.getOrNull(1)?.timeMs == 62_189L, "${ttmlLines.getOrNull(1)?.timeMs}")
+    check("amll-ttml-entities", ttmlLines.getOrNull(1)?.text == "鳴る&夜", "${ttmlLines.getOrNull(1)?.text}")
+
+    // ---------------------------------------------------------- 歌词第二行模式
+    val none = LyricsSecondaryLineMode.NONE
+    val translationMode = LyricsSecondaryLineMode.TRANSLATION
+    val phoneticMode = LyricsSecondaryLineMode.PHONETIC
+    check(
+        "lyric-mode-both-cycle",
+        nextLyricsSecondaryLineMode(translationMode, true, true) == phoneticMode &&
+            nextLyricsSecondaryLineMode(phoneticMode, true, true) == none &&
+            nextLyricsSecondaryLineMode(none, true, true) == translationMode,
+    )
+    check(
+        "lyric-mode-translation-only",
+        nextLyricsSecondaryLineMode(translationMode, true, false) == none &&
+            nextLyricsSecondaryLineMode(none, true, false) == translationMode,
+    )
+    check(
+        "lyric-mode-resolve",
+        resolveLyricsSecondaryLineMode(false, true, true, true) == none &&
+            resolveLyricsSecondaryLineMode(true, true, true, true) == phoneticMode &&
+            resolveLyricsSecondaryLineMode(true, true, true, false) == translationMode &&
+            resolveLyricsSecondaryLineMode(true, true, false, true) == phoneticMode,
+    )
+    check(
+        "lyric-source-alias",
+        LyricSource.of("cloud_music") == LyricSource.NETEASE &&
+            LyricSource.of("amll_ttml") == LyricSource.AMLL &&
+            LyricSource.of("nonsense") == LyricSource.AUTO &&
+            LyricSource.of(null) == LyricSource.AUTO,
+    )
+
+    // ---------------------------------------------------------- 评论时间格式
+    val now = 1_700_000_000_000L
+    check("comment-time-minutes", formatCommentTime(now - 5 * 60_000L, now) == "5 分钟前")
+    check("comment-time-hours", formatCommentTime(now - 3 * 3_600_000L, now) == "3 小时前")
+    check("comment-time-days", formatCommentTime(now - 4 * 86_400_000L, now) == "4 天前")
+    check("comment-time-empty", formatCommentTime(0L, now) == "")
+
+    // ---------------------------------------------------------- 在线：三个歌词源
+    val song = moe.ouom.neriplayer.desktop.core.Song(
+        key = "netease:1409311773",
+        source = moe.ouom.neriplayer.desktop.core.MediaSource.NETEASE,
+        title = "夜に駆ける",
+        artist = "YOASOBI",
+        album = "夜に駆ける",
+        durationMs = 261_013L,
+        remoteId = "1409311773",
+    )
+    for (source in listOf(LyricSource.LRCLIB, LyricSource.KUGOU, LyricSource.AMLL)) {
+        val hit = runCatching { online.preferredLyrics(song, source) }.getOrNull()
+        val lines = hit?.let { lrc.parse(it.raw).size } ?: 0
+        log("lyric-source ${source.id}: source=${hit?.source} chars=${hit?.raw?.length ?: 0} lines=$lines")
+        check("lyric-source-${source.id.lowercase()}", lines > 0, "${hit?.source} lines=$lines")
+    }
+
+    // ---------------------------------------------------------- 在线：网易云音译
+    val neteaseLyric = online.netease.lyric("1409311773")
+    log(
+        "netease lyric: raw=${neteaseLyric?.raw?.length ?: 0} " +
+            "translated=${neteaseLyric?.translated?.length ?: 0} romanized=${neteaseLyric?.romanized?.length ?: 0}",
+    )
+    check("netease-translation-present", !neteaseLyric?.translated.isNullOrBlank())
+    check("netease-romanization-present", !neteaseLyric?.romanized.isNullOrBlank())
+
+    // ---------------------------------------------------------- 在线：评论
+    val neteaseComments = online.comments(song, 0, 20)
+    log(
+        "netease comments: total=${neteaseComments?.total} hot=${neteaseComments?.hot?.size ?: 0} " +
+            "latest=${neteaseComments?.latest?.size ?: 0} hasMore=${neteaseComments?.hasMore}",
+    )
+    check("netease-comments", (neteaseComments?.latest?.size ?: 0) > 0)
+    check(
+        "netease-comment-fields",
+        neteaseComments?.latest?.firstOrNull()?.let { it.content.isNotBlank() && it.author.isNotBlank() } == true,
+    )
+
+    val biliSong = moe.ouom.neriplayer.desktop.core.Song(
+        key = "bili:BV1d4411N7zD",
+        source = moe.ouom.neriplayer.desktop.core.MediaSource.BILIBILI,
+        title = "晴天 MV",
+        artist = "周杰伦",
+        durationMs = 269_000L,
+        remoteId = "BV1d4411N7zD",
+    )
+    val biliComments = online.comments(biliSong, 0, 20)
+    log("bili comments: total=${biliComments?.total} latest=${biliComments?.latest?.size ?: 0}")
+    check("bili-comments", (biliComments?.latest?.size ?: 0) > 0)
 }
 
 /** 后台播放信息快照（系统媒体控制 / 托盘 / 通知共用）。 */
@@ -273,7 +421,7 @@ private suspend fun checkDownloads(online: moe.ouom.neriplayer.desktop.net.Onlin
         catalog = catalog,
         scope = scope,
         directoryOverride = tempDir,
-        lyricsProvider = { song -> online.lyrics(song)?.first },
+        lyricsProvider = { song -> online.lyrics(song)?.raw },
     )
     val candidates = online.search(
         moe.ouom.neriplayer.desktop.core.MediaSource.NETEASE,

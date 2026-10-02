@@ -504,14 +504,22 @@ fun SettingsScreen(
         item {
             SettingsSection(
                 title = "歌词与显示",
-                description = "歌词翻译、封面歌词与字号",
+                description = "歌词翻译 / 音译、封面歌词与字号",
                 icon = Icons.Outlined.Lyrics,
             ) {
                 SwitchRow(
-                    title = "显示歌词翻译",
-                    description = "在线歌词包含翻译时同时显示",
+                    title = "显示歌词第二行",
+                    description = "在线歌词包含翻译或音译时，在原文下方显示一行；关闭则只显示原文",
                     checked = settings.showLyricTranslation,
                     onCheckedChange = { value -> container.settings.update { current -> current.copy(showLyricTranslation = value) } },
+                )
+                SwitchRow(
+                    title = "第二行显示音译",
+                    description = "用音译（罗马音）替代翻译；歌词没有音译时会自动回落到翻译。" +
+                        "播放页歌词界面右上角的「译 / 音 / 原」按钮可以快速切换",
+                    checked = settings.lyricTranslationUsePhonetic,
+                    enabled = settings.showLyricTranslation,
+                    onCheckedChange = { value -> container.settings.update { current -> current.copy(lyricTranslationUsePhonetic = value) } },
                 )
                 SwitchRow(
                     title = "封面页显示歌词",
@@ -539,6 +547,13 @@ fun SettingsScreen(
                     valueRange = 0.7f..1.8f,
                 )
             }
+        }
+
+        item {
+            LyricsSourceSettingsSection(
+                container = container,
+                showMessage = showMessage,
+            )
         }
 
         item {
@@ -696,7 +711,7 @@ private fun AccountSettingsSection(
 }
 
 @Composable
-private fun SettingsSection(
+internal fun SettingsSection(
     title: String,
     description: String,
     icon: ImageVector,
@@ -741,7 +756,7 @@ private fun SettingsSection(
 }
 
 @Composable
-private fun SettingLabel(text: String) {
+internal fun SettingLabel(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.labelLarge,
@@ -750,7 +765,7 @@ private fun SettingLabel(text: String) {
 }
 
 @Composable
-private fun SwitchRow(
+internal fun SwitchRow(
     title: String,
     description: String? = null,
     checked: Boolean,

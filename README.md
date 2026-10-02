@@ -39,9 +39,9 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 
 | 文件 | 说明 |
 | --- | --- |
-| `NeriPlayer-1.4.7.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
-| `NeriPlayer-1.4.7.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.4.7.msi` |
-| `NeriPlayer-1.4.7-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
+| `NeriPlayer-1.5.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
+| `NeriPlayer-1.5.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.5.0.msi` |
+| `NeriPlayer-1.5.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
 
 安装完成后从开始菜单启动「NeriPlayer」。
 
@@ -94,6 +94,14 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 | --- | --- |
 | 首页（Windows 实机，在线推荐与热歌榜已加载） <br> ![Windows 首页](docs/screenshots/windows-home.png) | 探索（Windows 实机，联网加载推荐歌单封面） <br> ![Windows 探索](docs/screenshots/windows-explore.png) |
 
+歌词页（Windows 实机：在线歌词逐行高亮、跟随播放滚动）：
+
+![Windows 歌词页](docs/screenshots/windows-lyrics.png)
+
+评论面板（Windows 实机，网易云 / 哔哩哔哩原生评论）：
+
+![Windows 评论](docs/screenshots/windows-comments.png)
+
 首次启动的使用须知（系统缩放 125%，界面跟随系统 DPI）：
 
 ![Windows 使用须知](docs/screenshots/windows-onboarding.png)
@@ -111,7 +119,9 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 | 媒体库（本地 / 收藏 / 网易云 / 哔哩哔哩 / 下载 / QQ 音乐） | ✅ 本地歌曲 · 歌手 · 专辑 · 歌单；在线歌单、专辑与收藏夹（QQ 音乐为入口占位） |
 | 本地媒体库 | ✅ 文件夹扫描、读取标签与内嵌封面、搜索与排序 |
 | 播放引擎 | ✅ ffmpeg 解码（倍速 / 变调 / 响度 / 十段均衡器）+ Java Sound 回退引擎 |
-| 歌词 | ✅ 本地 `.lrc` → 内嵌标签 → 在线歌词；翻译、逐行高亮、点击跳转、字号调节 |
+| 歌词 | ✅ 本地 `.lrc` → 内嵌标签 → 在线歌词；**可选优先来源**（网易云 / 酷狗 / LRCLIB / AMLL TTML DB，各带默认偏移）；翻译、音译（罗马音）、逐行高亮、点击跳转、字号调节 |
+| 歌词第二行 | ✅ 翻译与音译互斥，播放页歌词界面右上角「译 / 音 / 原」一键循环切换 |
+| 歌曲评论 | ✅ 网易云 / 哔哩哔哩原生评论（热门 + 最新，滚动加载更多、只读） |
 | 悬浮歌词 | ✅ 无边框置顶窗口，可拖动定位，样式与手机端一致 |
 | 账号登录 | ✅ 网易云与哔哩哔哩应用内扫码登录 |
 | GitHub 同步 | ✅ 歌单 / 收藏 / 最近播放 / 播放统计，与手机端数据互通 |
@@ -134,6 +144,12 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 状态栏歌词、桌面小组件、启动器快捷方式、USB DAC 独占、省电保活与 ANR 日志、下载管理、
 一起听（依赖自建服务端）；YouTube Music 需要 Google 账号授权与专用解析，桌面端保留入口与说明。
 
+**歌词来源里的「QQ 音乐」也未移植**：它的歌词接口要把请求参数包成一层签名过的 JSON
+（`u.y.qq.com/cgi-bin/musicu.fcg`），收益不抵复杂度，而网易云 / 酷狗 / LRCLIB / AMLL 已覆盖绝大多数曲目。
+
+**评论是只读的**：网易云的点赞与发评论需要一个由 Android WebView + 网易 Watchman JS 生成的
+`checkToken`（桌面端要为此内嵌一个浏览器内核），因此桌面版只做「看评论」，不做点赞与回复。
+
 ## 快捷键
 
 | 按键 | 作用 |
@@ -145,6 +161,41 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 | `Ctrl` + `L` | 开关悬浮歌词 |
 
 ## 使用说明
+
+### 歌词来源与音译
+
+「设置 → 歌词来源」可以指定**优先歌词来源**，在线歌曲会先去那里找，找不到再按
+「本地 `.lrc` → 内嵌标签 → 歌曲所属平台」的顺序回退；本地歌曲始终优先使用同目录的 `.lrc`。
+
+| 来源 | 说明 |
+| --- | --- |
+| 自动 | 不额外指定，按老规矩走 |
+| 网易云 | 用「标题 + 歌手」搜索匹配，可取到翻译与音译（`romalrc`） |
+| 酷狗 | 按时长挑最接近的候选，取 LRC（含翻译） |
+| LRCLIB | 开放的歌词库，只取**带时间轴**的版本（纯文本歌词在逐行高亮里没法用） |
+| AMLL TTML DB | 社区逐字歌词库，取到行级时间轴；按标题搜索并用歌手 / 网易云 ID 交叉确认 |
+
+两个细节：
+
+- **时长校验**：第三方来源的时长与平台给的对不齐时留了余量（`max(7 秒, 期望时长 × 6%)`，上限 15 秒），
+  超出范围就判定不是同一首，避免串词。
+- **默认偏移**：每个来源可以单独配一个时间偏移（±5 秒、50 ms 一档，正值 = 歌词提前），
+  叠加在 LRC 自带的 `[offset:]` 之上 —— 有些歌词库整体偏几百毫秒，逐首调太麻烦。
+  桌面版默认全是 0（位置时钟直接来自解码器，不需要像手机端那样给网易云补 1 秒）。
+
+播放页歌词界面右上角的 **「译 / 音 / 原」** 按钮在「翻译 → 音译 → 原文」之间循环；
+**翻译与音译互斥**，同一时刻只显示第二行中的一种 —— 两行都堆在原文下面会把行距撑得很开。
+歌词没有音译时会自动回落到翻译。
+
+### 查看评论
+
+播放页歌词界面右上角的评论按钮可以打开评论面板（本地歌曲不会出现这个按钮）：
+
+- **网易云**：一次拿到热门评论与最新评论，显示昵称、头像、正文、点赞数、回复数与 IP 归属地；
+- **哔哩哔哩**：按视频 `aid` 取评论（由 `bvid` 经 `web-interface/view` 解析），按热度排序；
+- 滚动到底部点「加载更多」按已取条数翻页，追加时按评论 id 去重。
+
+评论是只读的，原因见上文「与原 Android 应用的差异」。
 
 ### 横屏 / 宽窗口布局
 
@@ -293,8 +344,8 @@ Windows 把「漫游配置」和「本机数据」分成两棵树，本应用同
 ```powershell
 gradlew run                    # 直接运行
 gradlew createDistributable    # 免安装应用目录：build\compose\binaries\main\app\NeriPlayer\
-gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.4.7.msi
-gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.4.7.exe
+gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.5.0.msi
+gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.5.0.exe
 ```
 
 - `gradlew` 是批处理包装脚本，在 CMD / PowerShell 里直接写 `gradlew`（或 `.\gradlew.bat`）；
@@ -428,8 +479,9 @@ MSI 使用固定的 `upgradeUuid`，覆盖升级即可。免安装版只要换�
 ├── src/main/kotlin/moe/ouom/neriplayer/desktop/
 │   ├── Main.kt                 应用入口、窗口、悬浮歌词窗口与快捷键
 │   ├── core/                   数据模型、Windows 目录布局、媒体库扫描、歌单与统计、
-│   │                           播放引擎与播放器、系统媒体控制（SMTC）与界面缩放
-│   ├── net/                    HTTP 客户端、网易云接口、哔哩哔哩 WBI 签名接口、扫码登录
+│   │                           播放引擎与播放器、歌词解析与仓库、系统媒体控制（SMTC）与界面缩放
+│   ├── net/                    HTTP 客户端、网易云接口、哔哩哔哩 WBI 签名接口、扫码登录、
+│   │                           外部歌词源（LRCLIB / 酷狗 / AMLL TTML DB）与评论
 │   ├── sync/                   GitHub 同步：数据模型、序列化、Git 传输、合并策略
 │   ├── ui/                    主题、通用组件、悬浮歌词、托盘与控制面板、同步与账号设置、各页面
 │   └── tools/                 自检与界面自动化脚本
@@ -437,7 +489,7 @@ MSI 使用固定的 `upgradeUuid`，覆盖升级即可。免安装版只要换�
 ├── docs/screenshots/           界面截图
 ├── packaging/                  MSI 图标（neriplayer.ico）、PNG 图标与许可文件
 ├── tools/                      辅助脚本（make_demo_library.py：生成演示曲库）
-├── build.gradle.kts            依赖、图标裁剪、Compose Desktop 打包（MSI）与验证任务
+├── build.gradle.kts            依赖、图标裁剪、Compose Desktop 打包（MSI / EXE）与验证任务
 └── gradlew / gradlew.bat       Gradle Wrapper（Windows / bash）
 ```
 

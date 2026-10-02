@@ -271,7 +271,7 @@ fun LyricsPane(
     currentIndex: Int,
     loading: Boolean,
     fontScale: Float,
-    showTranslation: Boolean,
+    secondaryLine: LyricsSecondaryLineMode,
     onSeekLine: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -321,9 +321,10 @@ fun LyricsPane(
                             },
                             textAlign = TextAlign.Start,
                         )
-                        if (showTranslation && !line.translation.isNullOrBlank()) {
+                        val secondary = secondaryLyricText(line, secondaryLine)
+                        if (secondary != null) {
                             Text(
-                                text = line.translation,
+                                text = secondary,
                                 fontSize = (15f * fontScale).sp,
                                 lineHeight = (21f * fontScale).sp,
                                 color = if (active) {
