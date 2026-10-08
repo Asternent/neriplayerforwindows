@@ -222,6 +222,49 @@ fun SyncSettingsSection(
                 ) { Text(if (verifying) "校验中…" else "验证 Token") }
             }
 
+            Spacer(Modifier.height(14.dp))
+            Text("步骤 2：选择仓库", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = ownerInput,
+                    onValueChange = { ownerInput = it.trim() },
+                    label = { Text("账号 / 组织") },
+                    singleLine = true,
+                    modifier = Modifier.width(180.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = repoInput,
+                    onValueChange = { repoInput = it.trim() },
+                    label = { Text("仓库名") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    enabled = config.token.isNotBlank(),
+                    onClick = {
+                        scope.launch {
+                            repoOptions = container.sync.listRepos(config.token)
+                            if (repoOptions.isEmpty()) showMessage("没有读取到仓库，请检查 Token 权限") else showRepoPicker = true
+                        }
+                    },
+                ) { Text("选择现有仓库") }
+                TextButton(
+                    enabled = config.token.isNotBlank() && !creating,
+                    onClick = { showCreateRepo = true },
+                ) { Text("创建私有仓库") }
+                TextButton(
+                    enabled = ownerInput.isNotBlank() && repoInput.isNotBlank(),
+                    onClick = {
+                        container.syncConfig.update { it.copy(owner = ownerInput, repo = repoInput) }
+                        container.sync.refreshConfiguredState()
+                        showMessage("已保存同步仓库：$ownerInput/$repoInput")
+                    },
+                ) { Text("保存仓库") }
             }
         } // end of else (GitHub backend)
 

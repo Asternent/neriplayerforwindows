@@ -104,7 +104,7 @@ class GitHubSyncManager(
             val remote = remoteFile?.let { file ->
                 runCatching { SyncDataSerializer.deserialize(file.content) }.getOrElse { SyncData() }
             }
-            if (remote == null || isEmptyData(remote)) {
+            if (remoteFile == null || remote == null || isEmptyData(remote)) {
                 val payload = prepareUpload(local, cfg)
                 val result = if (wdTransport != null) {
                     wdTransport.writeSyncFile(payload, remoteFile?.headSha, "NeriPlayer 桌面端初始同步", cfg.useDataSaver)

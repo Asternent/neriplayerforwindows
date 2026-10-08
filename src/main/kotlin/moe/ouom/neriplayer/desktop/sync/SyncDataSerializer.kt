@@ -53,13 +53,17 @@ object SyncDataSerializer {
     fun deserialize(content: ByteArray): SyncData {
         if (content.isEmpty()) return SyncData()
         // 1. 原始 ZSTD(ProtoBuf) (新版协议)
-        if (content.size > 4 && content[0] == 0x28.toByte() && content[1] == 0xB5.toByte() && 
+        if (content.size >= 4 && content[0] == 0x28.toByte() && content[1] == 0xB5.toByte() && 
             content[2] == 0x2F.toByte() && content[3] == 0xFD.toByte()) {
-            return protoBuf.decodeFromByteArray(SyncData.serializer(), zstdDecompress(content))
+            return runCatching {
+                protoBuf.decodeFromByteArray(SyncData.serializer(), zstdDecompress(content))
+            }.getOrElse { SyncData() }
         }
         // 1.5. 原始 GZIP(ProtoBuf) (旧版省流通道)
         if (content.size > 2 && content[0] == 0x1F.toByte() && content[1] == 0x8B.toByte()) {
-            return protoBuf.decodeFromByteArray(SyncData.serializer(), gunzip(content))
+            return runCatching {
+                protoBuf.decodeFromByteArray(SyncData.serializer(), gunzip(content))
+            }.getOrElse { SyncData() }
         }
         val text = content.decodeToString().trimStart('\uFEFF', ' ', '\n', '\r', '\t')
         // 2. JSON 文本

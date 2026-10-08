@@ -267,13 +267,17 @@ fun LocalPlaylistDetailScreen(
                 container.playlists.removeSong(playlist.id, current.key)
                 showMessage("已从歌单移除")
             },
-            onMoveUp = if (songs.indexOf(current) > 0) { ->
-                val idx = songs.indexOf(current)
-                container.playlists.reorderSong(playlist.id, idx, idx - 1)
+            onMoveUp = if (songs.indexOf(current) > 0) {
+                {
+                    val idx = songs.indexOf(current)
+                    container.playlists.reorderSong(playlist.id, idx, idx - 1)
+                }
             } else null,
-            onMoveDown = if (songs.indexOf(current) in 0 until songs.size - 1) { ->
-                val idx = songs.indexOf(current)
-                container.playlists.reorderSong(playlist.id, idx, idx + 1)
+            onMoveDown = if (songs.indexOf(current) in 0 until songs.size - 1) {
+                {
+                    val idx = songs.indexOf(current)
+                    container.playlists.reorderSong(playlist.id, idx, idx + 1)
+                }
             } else null,
             onDismiss = { actionSong = null },
         )

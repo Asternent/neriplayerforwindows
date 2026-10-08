@@ -202,6 +202,20 @@ class HttpService {
         body: String? = null,
         headers: Map<String, String> = emptyMap(),
         timeoutSeconds: Long = 30,
+    ): RawResponse? = executeBytes(
+        method = method,
+        url = url,
+        body = body?.toByteArray(Charsets.UTF_8),
+        headers = headers,
+        timeoutSeconds = timeoutSeconds,
+    )
+
+    fun executeBytes(
+        method: String,
+        url: String,
+        body: ByteArray? = null,
+        headers: Map<String, String> = emptyMap(),
+        timeoutSeconds: Long = 30,
     ): RawResponse? = runCatching {
         val host = runCatching { URI(url).host }.getOrNull().orEmpty()
         val builder = HttpRequest.newBuilder(URI(url))
@@ -213,7 +227,7 @@ class HttpService {
         val publisher = if (body == null) {
             HttpRequest.BodyPublishers.noBody()
         } else {
-            HttpRequest.BodyPublishers.ofString(body)
+            HttpRequest.BodyPublishers.ofByteArray(body)
         }
         when (method.uppercase()) {
             "GET" -> builder.GET()

@@ -51,6 +51,11 @@ class NeteaseApi(private val http: HttpService) {
         return NeriJsonParser.parse(text).asObject()?.let { JsonObjectSelf(it) }
     }
 
+    private fun postJson(path: String, form: Map<String, String> = emptyMap()): JsonObjectSelf? {
+        val text = http.postForm("$NETEASE_BASE$path", form, baseHeaders) ?: return null
+        return NeriJsonParser.parse(text).asObject()?.let { JsonObjectSelf(it) }
+    }
+
     private fun songFromJson(obj: JsonObjectSelf): Song? {
         val id = obj.long("id") ?: return null
         val artists = obj.array("artists")?.objects()?.mapNotNull { it.str("name") }.orEmpty()
@@ -353,14 +358,17 @@ class NeteaseApi(private val http: HttpService) {
 
     /** 获取用户收藏的歌手。 */
     fun followedArtists(): List<OnlineArtist> {
-        val root = postJson("/api/artist/sublist", mapOf("limit" to "100", "offset" to "0", "total" to "true")) ?: return emptyList()
+        val root = getJson("/api/artist/sublist?limit=100&offset=0&total=true")
+            ?: postJson("/api/artist/sublist", mapOf("limit" to "100", "offset" to "0", "total" to "true"))
+            ?: return emptyList()
         val data = root.array("data")?.objects().orEmpty()
         return data.mapNotNull { item ->
             val id = item.long("id") ?: return@mapNotNull null
             OnlineArtist(
                 id = id.toString(),
-                name = item.str("name") ?: "未知歌手",
+                name = cleanBiliText(item.str("name")).ifBlank { "未知歌手" },
                 avatarUrl = normalizeImageUrl(item.str("picUrl")),
+                songCount = item.int("musicSize") ?: 0,
                 source = MediaSource.NETEASE,
             )
         }

@@ -24,9 +24,11 @@ class WebDavSyncTransport(
 
     /** 测试连接 */
     fun testConnection(): Boolean {
-        // PROPFIND on base url to check if it's reachable and auth works
-        val response = http.execute("PROPFIND", buildUrl(""), headers = headers(mapOf("Depth" to "0")))
-        return response != null && response.status in 200..299
+        // 尝试 PROPFIND（Depth 0），部分服务器只允许 GET，做双重兜底
+        val propfind = http.execute("PROPFIND", buildUrl(""), headers = headers(mapOf("Depth" to "0")))
+        if (propfind != null && (propfind.status in 200..299 || propfind.status == 207)) return true
+        val get = http.execute("GET", buildUrl(""), headers = headers())
+        return get != null && get.status in 200..299
     }
 
     /** 读取同步文件 */
@@ -61,7 +63,7 @@ class WebDavSyncTransport(
             headers["If-Match"] = expectedHead
         }
         
-        val response = http.execute("PUT", url, body = content, headers = headers(headers))
+        val response = http.executeBytes("PUT", url, body = content, headers = headers(headers))
             ?: return SyncWriteResult.Failed("网络请求失败")
             
         if (response.status in 200..299 || response.status == 204) {

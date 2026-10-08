@@ -26,7 +26,7 @@ data class CommentPage(
 
 /** 网易云评论对象 → [Comment]。 */
 fun neteaseCommentFromJson(item: JsonObjectSelf): Comment? {
-    val id = item.long("commentId") ?: return null
+    val id = item.long("commentId") ?: item.long("beRepliedCommentId") ?: return null
     val content = item.str("content")?.trim().orEmpty()
     if (content.isEmpty()) return null
     val user = item.obj("user")
