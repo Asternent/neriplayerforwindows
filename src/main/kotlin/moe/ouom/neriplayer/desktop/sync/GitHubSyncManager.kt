@@ -86,31 +86,36 @@ class GitHubSyncManager(
     suspend fun performSync(): SyncState = withContext(Dispatchers.IO) {
         val cfg = ensureDeviceId()
         if (!cfg.configured) {
-            return@withContext finish(false, "尚未配置 GitHub 同步")
+            return@withContext finish(false, "尚未配置同步")
         }
         _state.value = _state.value.copy(running = true, message = "正在同步…", configured = true)
-        val transport = transportFor(cfg.token)
+        
+        val ghTransport = if (cfg.syncBackend != "WEBDAV") transportFor(cfg.token) else null
+        val wdTransport = if (cfg.syncBackend == "WEBDAV") WebDavSyncTransport(http, cfg.webdavUrl, cfg.webdavUsername, cfg.webdavPassword) else null
 
         var lastError = ""
         for (attempt in 1..2) {
             val local = buildLocalData(cfg)
-            val remoteFile = transport.readSyncFile(cfg.owner, cfg.repo, cfg.useDataSaver)
+            val remoteFile = if (wdTransport != null) {
+                wdTransport.readSyncFile(cfg.useDataSaver)
+            } else {
+                ghTransport!!.readSyncFile(cfg.owner, cfg.repo, cfg.useDataSaver)
+            }
             val remote = remoteFile?.let { file ->
                 runCatching { SyncDataSerializer.deserialize(file.content) }.getOrElse { SyncData() }
             }
             if (remote == null || isEmptyData(remote)) {
                 val payload = prepareUpload(local, cfg)
-                when (val result = transport.writeSyncFile(
-                    owner = cfg.owner,
-                    repo = cfg.repo,
-                    content = payload,
-                    expectedHead = remoteFile?.headSha,
-                    message = "NeriPlayer 桌面端初始同步",
-                    useDataSaver = cfg.useDataSaver,
-                )) {
+                val result = if (wdTransport != null) {
+                    wdTransport.writeSyncFile(payload, remoteFile?.headSha, "NeriPlayer 桌面端初始同步", cfg.useDataSaver)
+                } else {
+                    ghTransport!!.writeSyncFile(cfg.owner, cfg.repo, payload, remoteFile?.headSha, "NeriPlayer 桌面端初始同步", cfg.useDataSaver)
+                }
+                when (result) {
                     is SyncWriteResult.Success -> {
                         applyToLocal(local)
-                        return@withContext finish(true, "初始数据已上传到 ${cfg.repoFullName}")
+                        val target = if (wdTransport != null) "WebDAV" else cfg.repoFullName
+                        return@withContext finish(true, "初始数据已上传到 $target")
                     }
 
                     SyncWriteResult.Conflict -> {
@@ -128,14 +133,12 @@ class GitHubSyncManager(
                 return@withContext finish(true, "已是最新（远端数据已合并）")
             }
             val payload = prepareUpload(merged, cfg)
-            when (val result = transport.writeSyncFile(
-                owner = cfg.owner,
-                repo = cfg.repo,
-                content = payload,
-                expectedHead = remoteFile.headSha,
-                message = "NeriPlayer 桌面端同步 ${LocalDate.now()}",
-                useDataSaver = cfg.useDataSaver,
-            )) {
+            val result = if (wdTransport != null) {
+                wdTransport.writeSyncFile(payload, remoteFile.headSha, "NeriPlayer 桌面端同步 ${LocalDate.now()}", cfg.useDataSaver)
+            } else {
+                ghTransport!!.writeSyncFile(cfg.owner, cfg.repo, payload, remoteFile.headSha, "NeriPlayer 桌面端同步 ${LocalDate.now()}", cfg.useDataSaver)
+            }
+            when (result) {
                 is SyncWriteResult.Success -> return@withContext finish(true, describeMerge(merged))
                 SyncWriteResult.Conflict -> {
                     lastError = "远端已更新，正在重试"

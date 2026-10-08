@@ -11,6 +11,7 @@ data class Comment(
     val replyCount: Int = 0,
     val location: String? = null,
     val isHot: Boolean = false,
+    val replies: List<Comment> = emptyList(),
 )
 
 /** 一页评论：[hot] 只在第一页有值，且已经与 [latest] 去重。 */
@@ -39,6 +40,7 @@ fun neteaseCommentFromJson(item: JsonObjectSelf): Comment? {
         timeMs = item.long("time") ?: 0L,
         replyCount = (item.long("replyCount") ?: item.long("repliedCount") ?: 0L).toInt(),
         location = item.str("ipLocation")?.takeIf { it.isNotBlank() },
+        replies = item.array("beReplied")?.objects().orEmpty().mapNotNull { neteaseCommentFromJson(JsonObjectSelf(it)) },
     )
 }
 
@@ -58,6 +60,7 @@ fun biliCommentFromJson(item: JsonObjectSelf): Comment? {
         // B 站的 ctime 是秒
         timeMs = (item.long("ctime") ?: 0L) * 1000L,
         replyCount = item.long("rcount")?.toInt() ?: 0,
+        replies = item.array("replies")?.objects().orEmpty().mapNotNull { biliCommentFromJson(JsonObjectSelf(it)) },
     )
 }
 

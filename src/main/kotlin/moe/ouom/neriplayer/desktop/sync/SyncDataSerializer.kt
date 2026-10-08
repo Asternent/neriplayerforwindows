@@ -42,7 +42,7 @@ object SyncDataSerializer {
 
     fun serialize(data: SyncData, useDataSaver: Boolean): ByteArray {
         val content = if (useDataSaver) {
-            gzip(protoBuf.encodeToByteArray(SyncData.serializer(), data))
+            zstdCompress(protoBuf.encodeToByteArray(SyncData.serializer(), data))
         } else {
             json.encodeToString(SyncData.serializer(), data).toByteArray(Charsets.UTF_8)
         }
@@ -52,7 +52,12 @@ object SyncDataSerializer {
 
     fun deserialize(content: ByteArray): SyncData {
         if (content.isEmpty()) return SyncData()
-        // 1. 原始 GZIP(ProtoBuf)
+        // 1. 原始 ZSTD(ProtoBuf) (新版协议)
+        if (content.size > 4 && content[0] == 0x28.toByte() && content[1] == 0xB5.toByte() && 
+            content[2] == 0x2F.toByte() && content[3] == 0xFD.toByte()) {
+            return protoBuf.decodeFromByteArray(SyncData.serializer(), zstdDecompress(content))
+        }
+        // 1.5. 原始 GZIP(ProtoBuf) (旧版省流通道)
         if (content.size > 2 && content[0] == 0x1F.toByte() && content[1] == 0x8B.toByte()) {
             return protoBuf.decodeFromByteArray(SyncData.serializer(), gunzip(content))
         }
@@ -72,6 +77,28 @@ object SyncDataSerializer {
     private fun gzip(bytes: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
         GZIPOutputStream(out).use { it.write(bytes) }
+        return out.toByteArray()
+    }
+    
+    private fun zstdCompress(bytes: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        com.github.luben.zstd.ZstdOutputStream(out).use { it.write(bytes) }
+        return out.toByteArray()
+    }
+
+    private fun zstdDecompress(bytes: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        com.github.luben.zstd.ZstdInputStream(bytes.inputStream()).use { stream ->
+            val buffer = ByteArray(1 shl 16)
+            var total = 0
+            while (true) {
+                val read = stream.read(buffer)
+                if (read < 0) break
+                total += read
+                require(total <= MAX_DECOMPRESSED_BYTES) { "同步数据解压后过大" }
+                out.write(buffer, 0, read)
+            }
+        }
         return out.toByteArray()
     }
 

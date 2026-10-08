@@ -350,6 +350,21 @@ class NeteaseApi(private val http: HttpService) {
             )
         }
     }
+
+    /** 获取用户收藏的歌手。 */
+    fun followedArtists(): List<OnlineArtist> {
+        val root = postJson("/api/artist/sublist", mapOf("limit" to "100", "offset" to "0", "total" to "true")) ?: return emptyList()
+        val data = root.array("data")?.objects().orEmpty()
+        return data.mapNotNull { item ->
+            val id = item.long("id") ?: return@mapNotNull null
+            OnlineArtist(
+                id = id.toString(),
+                name = item.str("name") ?: "未知歌手",
+                avatarUrl = normalizeImageUrl(item.str("picUrl")),
+                source = MediaSource.NETEASE,
+            )
+        }
+    }
 }
 
 /** 简单的 JSON 对象包装，方便统一调用解析扩展。 */
@@ -557,7 +572,8 @@ class BiliApi(private val http: HttpService) {
         val total = pageInfo?.long("count")?.toInt() ?: items.size
         val size = pageInfo?.long("size")?.toInt() ?: pageSize
         val current = pageInfo?.long("num")?.toInt() ?: page
-        return CommentPage(latest = items, total = total, hasMore = current * size < total)
+        val noMoreFromApi = items.isEmpty()
+        return CommentPage(latest = items, total = total, hasMore = !noMoreFromApi && current * size < total)
     }
 
     fun audioUrl(bvid: String, cid: String): String? {

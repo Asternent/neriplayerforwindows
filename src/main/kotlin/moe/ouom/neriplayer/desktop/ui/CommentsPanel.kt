@@ -42,6 +42,8 @@ import moe.ouom.neriplayer.desktop.core.Song
 import moe.ouom.neriplayer.desktop.net.Comment
 import moe.ouom.neriplayer.desktop.net.formatCommentTime
 
+enum class CommentPanelState { COLLAPSED, HALF, FULL }
+
 /**
  * 歌曲评论面板（网易云 / 哔哩哔哩）。
  *
@@ -56,6 +58,7 @@ fun CommentsPanel(
     onClose: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    var panelState by remember { mutableStateOf(CommentPanelState.HALF) }
     val pageSize = remember { container.settings.current.commentPageSize.coerceIn(5, 50) }
     // 本地歌曲没有可查的评论：直接给一句明确的话，别去请求再报「加载失败」
     val isLocal = song.source == MediaSource.LOCAL
@@ -96,8 +99,33 @@ fun CommentsPanel(
     }
 
     LaunchedEffect(song.key) { if (!isLocal) load(reset = true) }
+    
+    val panelWidth = when (panelState) {
+        CommentPanelState.COLLAPSED -> 0.dp // Will trigger close shortly
+        CommentPanelState.HALF -> 420.dp
+        CommentPanelState.FULL -> 800.dp
+    }
+    
+    LaunchedEffect(panelState) {
+        if (panelState == CommentPanelState.COLLAPSED) {
+            onClose()
+        }
+    }
 
-    OverlayPanel(title = "评论", onClose = onClose) {
+    OverlayPanel(
+        title = "评论", 
+        onClose = onClose,
+        width = panelWidth,
+        headerActions = {
+            TextButton(
+                onClick = {
+                    panelState = if (panelState == CommentPanelState.HALF) CommentPanelState.FULL else CommentPanelState.HALF
+                }
+            ) {
+                Text(if (panelState == CommentPanelState.HALF) "全屏" else "缩小")
+            }
+        }
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -235,6 +263,44 @@ private fun CommentRow(comment: Comment, isHot: Boolean) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
             )
+            
+            // Nested replies (楼中楼)
+            if (comment.replies.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    comment.replies.forEach { reply ->
+                        Row {
+                            Text(
+                                text = "${reply.author}: ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = reply.content,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    if (comment.replyCount > comment.replies.size) {
+                        Text(
+                            text = "查看全部 ${comment.replyCount} 条回复 >",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+            
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -260,7 +326,7 @@ private fun CommentRow(comment: Comment, isHot: Boolean) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (comment.replyCount > 0) {
+                if (comment.replyCount > 0 && comment.replies.isEmpty()) {
                     Spacer(Modifier.width(8.dp))
                     Text(
                         text = "💬 ${comment.replyCount}",

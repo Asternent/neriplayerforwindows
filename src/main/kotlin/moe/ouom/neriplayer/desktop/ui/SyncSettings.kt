@@ -109,86 +109,121 @@ fun SyncSettingsSection(
         }
 
         Spacer(Modifier.height(14.dp))
-        Text("步骤 1：GitHub Token", style = MaterialTheme.typography.titleSmall)
-        Text(
-            text = "在 GitHub → Settings → Developer settings → Personal access tokens 生成一个勾选 repo 权限的 Token（建议 fine-grained 且只授权给同步仓库）",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = tokenInput,
-                onValueChange = { tokenInput = it.trim() },
-                label = { Text("Token") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.weight(1f),
+            Text("同步方式：", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.width(8.dp))
+            androidx.compose.material3.FilterChip(
+                selected = config.syncBackend == "GITHUB",
+                onClick = { container.syncConfig.update { it.copy(syncBackend = "GITHUB") }; container.sync.refreshConfiguredState() },
+                label = { Text("GitHub") }
             )
             Spacer(Modifier.width(8.dp))
-            TextButton(
-                enabled = tokenInput.isNotBlank() && !verifying,
-                onClick = {
-                    verifying = true
-                    scope.launch {
-                        val result = container.sync.verifyToken(tokenInput)
-                        verifying = false
-                        result.onSuccess { login ->
-                            container.syncConfig.update { it.copy(token = tokenInput, owner = login) }
-                            ownerInput = login
-                            showMessage("Token 有效，已登录为 $login")
-                        }.onFailure { error ->
-                            showMessage(error.message ?: "Token 校验失败")
+            androidx.compose.material3.FilterChip(
+                selected = config.syncBackend == "WEBDAV",
+                onClick = { container.syncConfig.update { it.copy(syncBackend = "WEBDAV") }; container.sync.refreshConfiguredState() },
+                label = { Text("WebDAV") }
+            )
+        }
+        
+        Spacer(Modifier.height(14.dp))
+        
+        if (config.syncBackend == "WEBDAV") {
+            var urlInput by remember(config.webdavUrl) { mutableStateOf(config.webdavUrl) }
+            var userInput by remember(config.webdavUsername) { mutableStateOf(config.webdavUsername) }
+            var passInput by remember(config.webdavPassword) { mutableStateOf(config.webdavPassword) }
+            
+            Text("WebDAV 凭证", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = urlInput,
+                onValueChange = { urlInput = it.trim() },
+                label = { Text("服务器地址 (URL)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = userInput,
+                    onValueChange = { userInput = it.trim() },
+                    label = { Text("用户名") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = passInput,
+                    onValueChange = { passInput = it.trim() },
+                    label = { Text("密码") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    enabled = urlInput.isNotBlank() && userInput.isNotBlank() && passInput.isNotBlank() && !verifying,
+                    onClick = {
+                        verifying = true
+                        scope.launch {
+                            val transport = moe.ouom.neriplayer.desktop.sync.WebDavSyncTransport(
+                                container.http, urlInput, userInput, passInput
+                            )
+                            val ok = withContext(Dispatchers.IO) { transport.testConnection() }
+                            verifying = false
+                            if (ok) {
+                                container.syncConfig.update { 
+                                    it.copy(webdavUrl = urlInput, webdavUsername = userInput, webdavPassword = passInput) 
+                                }
+                                container.sync.refreshConfiguredState()
+                                showMessage("测试连接成功并已保存配置")
+                            } else {
+                                showMessage("测试连接失败，请检查地址或凭证")
+                            }
                         }
                     }
-                },
-            ) { Text(if (verifying) "校验中…" else "验证 Token") }
-        }
+                ) { Text(if (verifying) "测试中…" else "测试连接与保存") }
+            }
+        } else {
+            Text("步骤 1：GitHub Token", style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = "在 GitHub → Settings → Developer settings → Personal access tokens 生成一个勾选 repo 权限的 Token（建议 fine-grained 且只授权给同步仓库）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = tokenInput,
+                    onValueChange = { tokenInput = it.trim() },
+                    label = { Text("Token") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                TextButton(
+                    enabled = tokenInput.isNotBlank() && !verifying,
+                    onClick = {
+                        verifying = true
+                        scope.launch {
+                            val result = container.sync.verifyToken(tokenInput)
+                            verifying = false
+                            result.onSuccess { login ->
+                                container.syncConfig.update { it.copy(token = tokenInput, owner = login) }
+                                ownerInput = login
+                                showMessage("Token 有效，已登录为 $login")
+                            }.onFailure { error ->
+                                showMessage(error.message ?: "Token 校验失败")
+                            }
+                        }
+                    },
+                ) { Text(if (verifying) "校验中…" else "验证 Token") }
+            }
 
-        Spacer(Modifier.height(14.dp))
-        Text("步骤 2：选择仓库", style = MaterialTheme.typography.titleSmall)
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = ownerInput,
-                onValueChange = { ownerInput = it.trim() },
-                label = { Text("账号 / 组织") },
-                singleLine = true,
-                modifier = Modifier.width(180.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            OutlinedTextField(
-                value = repoInput,
-                onValueChange = { repoInput = it.trim() },
-                label = { Text("仓库名") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(
-                enabled = config.token.isNotBlank(),
-                onClick = {
-                    scope.launch {
-                        repoOptions = container.sync.listRepos(config.token)
-                        if (repoOptions.isEmpty()) showMessage("没有读取到仓库，请检查 Token 权限") else showRepoPicker = true
-                    }
-                },
-            ) { Text("选择现有仓库") }
-            TextButton(
-                enabled = config.token.isNotBlank() && !creating,
-                onClick = { showCreateRepo = true },
-            ) { Text("创建私有仓库") }
-            TextButton(
-                enabled = ownerInput.isNotBlank() && repoInput.isNotBlank(),
-                onClick = {
-                    container.syncConfig.update { it.copy(owner = ownerInput, repo = repoInput) }
-                    container.sync.refreshConfiguredState()
-                    showMessage("已保存同步仓库：$ownerInput/$repoInput")
-                },
-            ) { Text("保存仓库") }
-        }
+            }
+        } // end of else (GitHub backend)
 
         Spacer(Modifier.height(6.dp))
         SwitchRowCompact(

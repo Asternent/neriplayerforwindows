@@ -346,6 +346,8 @@ fun OverlayPanel(
     title: String,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    width: androidx.compose.ui.unit.Dp = 420.dp,
+    headerActions: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Box(
@@ -357,7 +359,7 @@ fun OverlayPanel(
         Surface(
             modifier = modifier
                 .fillMaxHeight()
-                .width(420.dp)
+                .width(width)
                 .padding(12.dp)
                 .clickable(enabled = false) {},
             shape = RoundedCornerShape(24.dp),
@@ -375,6 +377,10 @@ fun OverlayPanel(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
                     )
+                    if (headerActions != null) {
+                        headerActions()
+                        Spacer(Modifier.width(8.dp))
+                    }
                     IconButton(onClick = onClose) {
                         Icon(Icons.Outlined.Close, contentDescription = "关闭")
                     }

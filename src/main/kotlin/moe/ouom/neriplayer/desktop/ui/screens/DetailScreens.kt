@@ -267,6 +267,14 @@ fun LocalPlaylistDetailScreen(
                 container.playlists.removeSong(playlist.id, current.key)
                 showMessage("已从歌单移除")
             },
+            onMoveUp = if (songs.indexOf(current) > 0) { ->
+                val idx = songs.indexOf(current)
+                container.playlists.reorderSong(playlist.id, idx, idx - 1)
+            } else null,
+            onMoveDown = if (songs.indexOf(current) in 0 until songs.size - 1) { ->
+                val idx = songs.indexOf(current)
+                container.playlists.reorderSong(playlist.id, idx, idx + 1)
+            } else null,
             onDismiss = { actionSong = null },
         )
     }
@@ -296,6 +304,8 @@ fun SongActionsDialog(
     showMessage: (String) -> Unit,
     onDismiss: () -> Unit,
     onRemoveFromPlaylist: (() -> Unit)? = null,
+    onMoveUp: (() -> Unit)? = null,
+    onMoveDown: (() -> Unit)? = null,
 ) {
     val playlists by container.playlists.playlists.collectAsState()
     var showPlaylistPicker by remember { mutableStateOf(false) }
@@ -366,6 +376,18 @@ fun SongActionsDialog(
                 } else if (song.source != moe.ouom.neriplayer.desktop.core.MediaSource.LOCAL) {
                     ActionEntry("下载到本地") {
                         container.downloads.enqueue(listOf(song), showMessage)
+                        onDismiss()
+                    }
+                }
+                if (onMoveUp != null) {
+                    ActionEntry("上移一曲") {
+                        onMoveUp()
+                        onDismiss()
+                    }
+                }
+                if (onMoveDown != null) {
+                    ActionEntry("下移一曲") {
+                        onMoveDown()
                         onDismiss()
                     }
                 }

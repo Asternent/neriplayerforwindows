@@ -197,7 +197,13 @@ fun LibraryScreen(
                     } else {
                         runCatching { container.online.netease.searchPlaylists(keyword, 20) }.getOrDefault(emptyList())
                     }
-                    onlineArtists = if (query.isBlank()) emptyList() else {
+                    onlineArtists = if (query.isBlank()) {
+                        if (neteaseUid.isNotBlank()) {
+                            runCatching { container.online.netease.followedArtists() }.getOrDefault(emptyList())
+                        } else {
+                            emptyList()
+                        }
+                    } else {
                         runCatching { container.online.netease.searchArtists(keyword, 20) }.getOrDefault(emptyList())
                     }
                     onlineSongs = emptyList()
@@ -393,7 +399,7 @@ fun LibraryScreen(
                                     }
                                 }
                                 if (onlineArtists.isNotEmpty()) {
-                                    item { SectionHeader(title = "歌手") }
+                                    item { SectionHeader(title = if (query.isBlank()) "关注的歌手" else "歌手") }
                                     items(onlineArtists, key = { it.id }) { artist ->
                                         Row(
                                             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),

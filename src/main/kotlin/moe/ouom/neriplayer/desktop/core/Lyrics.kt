@@ -158,7 +158,16 @@ class LyricsRepository(
 
         val preferred = preferredSource()
         if (preferred != LyricSource.AUTO && song.source != MediaSource.LOCAL) {
-            val hit = runCatching { preferredProvider(song, preferred) }.getOrNull()
+            var hit = runCatching { preferredProvider(song, preferred) }.getOrNull()
+            
+            // 歌词音译回退：如果指定了第三方来源且没拿到音译，回退到网易云补全音译
+            if (hit != null && hit.raw.isNotBlank() && hit.romanized.isNullOrBlank() && preferred != LyricSource.NETEASE) {
+                val fallback = runCatching { preferredProvider(song, LyricSource.NETEASE) }.getOrNull()
+                if (fallback?.romanized?.isNotBlank() == true) {
+                    hit = hit.copy(romanized = fallback.romanized)
+                }
+            }
+            
             if (hit != null && hit.raw.isNotBlank()) {
                 val lyrics = fromResult(hit, offsetMs(preferred))
                 synchronized(cacheLock) { cache[song.key] = lyrics }

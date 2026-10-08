@@ -17,10 +17,17 @@ data class SyncConfig(
     val autoSync: Boolean = true,
     /** 支持 GitHub Enterprise / 自建地址；默认 github.com。 */
     val apiBase: String = "https://api.github.com",
+    val webdavUrl: String = "",
+    val webdavUsername: String = "",
+    val webdavPassword: String = "",
+    val syncBackend: String = "GITHUB", // GITHUB or WEBDAV
     val lastSyncAt: Long = 0L,
     val lastStatus: String = "",
 ) {
-    val configured: Boolean get() = token.isNotBlank() && owner.isNotBlank() && repo.isNotBlank()
+    val configured: Boolean get() = when (syncBackend) {
+        "WEBDAV" -> webdavUrl.isNotBlank() && webdavUsername.isNotBlank() && webdavPassword.isNotBlank()
+        else -> token.isNotBlank() && owner.isNotBlank() && repo.isNotBlank()
+    }
 
     val repoFullName: String get() = if (owner.isBlank() || repo.isBlank()) "" else "$owner/$repo"
 }
