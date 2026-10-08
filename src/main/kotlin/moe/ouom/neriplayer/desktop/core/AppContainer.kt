@@ -24,6 +24,7 @@ class AppContainer {
     val history = HistoryRepository()
     val stats = StatsRepository(history)
     val online = OnlineRepository()
+    val http: moe.ouom.neriplayer.desktop.net.HttpService get() = online.httpService
     val accounts = AccountRepository(online.httpService)
     val syncConfig = SyncConfigStore()
     val downloadCatalog = DownloadCatalog()

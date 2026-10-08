@@ -102,6 +102,8 @@ class PlaylistRepository {
         persist()
     }
 
+    fun reorderSong(id: String, from: Int, to: Int) = moveSong(id, from, to)
+
     fun toggleFavorite(song: Song): Boolean {
         val isFav = isFavorite(song)
         if (isFav) {
