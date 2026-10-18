@@ -252,6 +252,16 @@ suspend fun runUiScript(
             "log" -> host.log(command.argument)
             // 自动化验证安装包版本：日志里直接打印「关于」页展示的版本
             "version" -> host.log("version=${moe.ouom.neriplayer.desktop.core.BuildInfo.VERSION}")
+            // 自动化验证播放进度与歌词行：排查「歌词不滚动 / 时长不显示」这类界面问题
+            "playback" -> {
+                val player = container.player
+                val lines = player.lyrics.value.lines
+                host.log(
+                    "playback pos=${player.positionMs.value} dur=${player.durationMs.value} " +
+                        "state=${player.state.value} lines=${lines.size} " +
+                        "index=${moe.ouom.neriplayer.desktop.core.currentLyricIndex(lines, player.positionMs.value)}",
+                )
+            }
             "mem-report" -> {
                 if (command.argument.isNotBlank()) host.log("[阶段] ${command.argument}")
                 host.logMemory()

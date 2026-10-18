@@ -100,6 +100,9 @@ fun NowPlayingScreen(
     val song by container.player.currentSong.collectAsState()
     val state by container.player.state.collectAsState()
     val duration by container.player.durationMs.collectAsState()
+    // 只持有 State 对象：让进度条与歌词索引在各自的 derivedStateOf 里读，
+    // 这样读的是 Compose 的 State（可追踪），而不是 StateFlow.value（不可追踪）。
+    val positionState = container.player.positionMs.collectAsState()
     val shuffle by container.player.shuffle.collectAsState()
     val repeatMode by container.player.repeatMode.collectAsState()
     val volume by container.player.volume.collectAsState()
@@ -154,7 +157,7 @@ fun NowPlayingScreen(
     // 只在「当前歌词行变了」时重组，而不是每 200ms 一次；播放进度由进度条自己读
     val lyricIndex by remember(lyrics) {
         androidx.compose.runtime.derivedStateOf {
-            currentLyricIndex(lyrics.lines, container.player.positionMs.value)
+            currentLyricIndex(lyrics.lines, positionState.value)
         }
     }
 
@@ -218,7 +221,7 @@ fun NowPlayingScreen(
                                     container = container,
                                     showMessage = showMessage,
                                     song = song,
-                                    positionMs = { container.player.positionMs.value },
+                                    positionMs = { positionState.value },
                                     duration = duration,
                                     state = state,
                                     buffering = buffering,
@@ -258,7 +261,7 @@ fun NowPlayingScreen(
                                 container = container,
                                 showMessage = showMessage,
                                 song = song,
-                                positionMs = { container.player.positionMs.value },
+                                positionMs = { positionState.value },
                                 duration = duration,
                                 state = state,
                                 buffering = buffering,
@@ -707,9 +710,10 @@ private fun PlayerCore(
 @Composable
 private fun CoverLyricsLine(container: AppContainer) {
     val lyrics by container.player.lyrics.collectAsState()
+    val positionState = container.player.positionMs.collectAsState()
     val index by remember(lyrics) {
         androidx.compose.runtime.derivedStateOf {
-            currentLyricIndex(lyrics.lines, container.player.positionMs.value)
+            currentLyricIndex(lyrics.lines, positionState.value)
         }
     }
     if (lyrics.lines.isEmpty()) return

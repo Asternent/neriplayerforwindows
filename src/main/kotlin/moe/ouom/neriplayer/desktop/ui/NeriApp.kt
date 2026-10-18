@@ -104,6 +104,9 @@ private fun AppScaffold(container: AppContainer) {
     val song by container.player.currentSong.collectAsState()
     val state by container.player.state.collectAsState()
     val duration by container.player.durationMs.collectAsState()
+    // 注意：只持有 State 对象、不在组合体内直接读 .value。
+    // 进度条在自己的 derivedStateOf 里读它才能被追踪；直接读 StateFlow.value 不会被重组系统感知。
+    val positionState = container.player.positionMs.collectAsState()
     var showOnboarding by remember { mutableStateOf(!settings.onboardingAccepted) }
     var uiTestOverlay by remember { mutableStateOf<String?>(null) }
     val locateRequest = remember { mutableStateOf<Pair<Int, String?>?>(null) }
@@ -253,7 +256,7 @@ private fun AppScaffold(container: AppContainer) {
                         song = song,
                         isPlaying = state == moe.ouom.neriplayer.desktop.core.PlaybackState.PLAYING,
                         // 播放进度每 200ms 变一次：传 lambda，别让整个 Scaffold（含所有页面）跟着重组
-                        positionMs = { container.player.positionMs.value },
+                        positionMs = { positionState.value },
                         durationMs = duration,
                         onToggle = { container.player.togglePlayPause() },
                         onNext = { container.player.next() },
