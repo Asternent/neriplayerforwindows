@@ -403,6 +403,20 @@ private suspend fun checkLyricSources(online: OnlineRepository) {
             !moe.ouom.neriplayer.desktop.core.Lyrics(lines = listOf(moe.ouom.neriplayer.desktop.core.LyricLine(1_000L, "x"))).hasWordTiming,
     )
 
+    // ---------------------------------------------------------- Apple Music 风格歌词页
+    // 当前行最亮，离当前行越远越暗：距离 1 > 2 > 更远，且当前行是 1.0
+    check(
+        "apple-lyric-alpha",
+        moe.ouom.neriplayer.desktop.ui.screens.appleLyricAlpha(true, 0) == 1f &&
+            moe.ouom.neriplayer.desktop.ui.screens.appleLyricAlpha(false, 1) >
+            moe.ouom.neriplayer.desktop.ui.screens.appleLyricAlpha(false, 2) &&
+            moe.ouom.neriplayer.desktop.ui.screens.appleLyricAlpha(false, 2) >
+            moe.ouom.neriplayer.desktop.ui.screens.appleLyricAlpha(false, 9),
+        "${moe.ouom.neriplayer.desktop.ui.screens.appleLyricAlpha(false, 1)} / " +
+            "${moe.ouom.neriplayer.desktop.ui.screens.appleLyricAlpha(false, 2)} / " +
+            "${moe.ouom.neriplayer.desktop.ui.screens.appleLyricAlpha(false, 9)}",
+    )
+
     // ---------------------------------------------------------- 酷狗 KRC 解码
     run {
         val plainKrc = "[1000,2000]<0,500,0>逐<500,500,0>字<1000,1000,0>歌詞\n"

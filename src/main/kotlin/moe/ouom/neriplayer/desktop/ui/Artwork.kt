@@ -92,8 +92,8 @@ private object ArtworkCache {
     fun markFailed(key: String) = synchronized(failed) { failed[key] = System.currentTimeMillis() }
 }
 
-private fun artworkCacheKey(song: Song): String =
-    song.key + "|" + (song.artworkPath ?: song.artworkUrl ?: "")
+private fun artworkCacheKey(song: Song, maxPx: Int): String =
+    song.key + "|" + (song.artworkPath ?: song.artworkUrl ?: "") + "|" + maxPx
 
 private fun sizeOf(bitmap: ImageBitmap): Long = bitmap.width.toLong() * bitmap.height * 4L
 
@@ -160,31 +160,31 @@ private suspend fun loadRemoteBitmap(
         decodeArtwork(bytes, maxPx)
     }
 
-private suspend fun loadSongArtwork(song: Song): ImageBitmap? = withContext(Dispatchers.IO) {
+private suspend fun loadSongArtwork(song: Song, maxPx: Int): ImageBitmap? = withContext(Dispatchers.IO) {
     val localPath = song.artworkPath
     if (!localPath.isNullOrBlank()) {
         val file = File(localPath)
         if (file.isFile) {
             runCatching { file.readBytes() }.getOrNull()?.let { bytes ->
-                decodeArtwork(bytes)?.let { return@withContext it }
+                decodeArtwork(bytes, maxPx)?.let { return@withContext it }
             }
         }
     }
     val url = song.artworkUrl ?: return@withContext null
-    loadRemoteBitmap(url)
+    loadRemoteBitmap(url, maxPx = maxPx)
 }
 
 @Composable
-fun rememberArtwork(song: Song?): ImageBitmap? {
+fun rememberArtwork(song: Song?, maxPx: Int = ARTWORK_MAX_PX): ImageBitmap? {
     if (song == null) return null
-    val key = artworkCacheKey(song)
+    val key = artworkCacheKey(song, maxPx)
     // state 里带上 key，确保切歌后只会使用当前歌曲的封面，不会继续显示上一首
     val state by produceState<Pair<String, ImageBitmap?>?>(initialValue = null, key) {
         val cached = ArtworkCache.get(key)
         value = key to cached
         if (cached != null) return@produceState
         if (ArtworkCache.hasFailed(key)) return@produceState
-        val loaded = loadSongArtwork(song)
+        val loaded = loadSongArtwork(song, maxPx)
         if (loaded == null) {
             ArtworkCache.markFailed(key)
         } else {

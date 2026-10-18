@@ -39,9 +39,9 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 
 | 文件 | 说明 |
 | --- | --- |
-| `NeriPlayer-1.12.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
-| `NeriPlayer-1.12.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.12.0.msi` |
-| `NeriPlayer-1.12.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
+| `NeriPlayer-1.13.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
+| `NeriPlayer-1.13.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.13.0.msi` |
+| `NeriPlayer-1.13.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
 
 安装完成后从开始菜单启动「NeriPlayer」。
 
@@ -78,8 +78,9 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 | 媒体库：本地 / 收藏 / 在线音源 <br> ![媒体库](docs/screenshots/library.png) | 播放页：封面、进度、音效与队列 <br> ![播放页](docs/screenshots/nowplaying.png) |
 | 歌词页：逐行高亮与翻译 <br> ![歌词](docs/screenshots/lyrics.png) | 播放队列：排序 / 移除 / 跳转 <br> ![队列](docs/screenshots/queue.png) |
 | 逐字歌词：当前行按字扫光 <br> ![逐字歌词](docs/screenshots/word-lyrics.png) | 悬浮歌词（描边样式，可拖动定位） <br> ![悬浮歌词](docs/screenshots/floating-lyrics.png) |
+| Apple Music 风格歌词页：模糊封面 + 大字高亮 <br> ![Apple 歌词页](docs/screenshots/apple-lyrics.png) | 托盘控制面板：封面、进度、传输控制与音量 <br> ![托盘面板](docs/screenshots/tray-panel.png) |
 | 设置 → 账号：网易云 / 哔哩哔哩扫码登录 <br> ![账号](docs/screenshots/settings.png) | 设置 → 同步：GitHub 跨设备同步 <br> ![同步](docs/screenshots/github-sync.png) |
-| 托盘控制面板：封面、进度、传输控制与音量 <br> ![托盘面板](docs/screenshots/tray-panel.png) | 同一面板的深色主题 <br> ![托盘面板深色](docs/screenshots/tray-panel-dark.png) |
+| 同一面板的深色主题 <br> ![托盘面板深色](docs/screenshots/tray-panel-dark.png) | 横屏 · 首页：推荐与热歌卡片两两并排 <br> ![横屏首页](docs/screenshots/landscape-home.png) |
 | 横屏 · 首页：推荐与热歌卡片两两并排 <br> ![横屏首页](docs/screenshots/landscape-home.png) | 横屏 · 设置：两栏排版，不用滚很久 <br> ![横屏设置](docs/screenshots/landscape-settings.png) |
 | 横屏 · 播放页：封面与歌词并排 <br> ![横屏播放页](docs/screenshots/landscape-nowplaying.png) | 横屏 · 探索：标签按宽度自动折行铺满 <br> ![横屏探索](docs/screenshots/landscape-explore.png) |
 | 界面缩放：跟随系统 / 手动 100%–250% <br> ![界面缩放](docs/screenshots/ui-scale.png) | 高分屏（系统 200% 缩放）下的实际渲染 <br> ![HiDPI](docs/screenshots/hidpi-200.png) |
@@ -121,6 +122,7 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 | 播放引擎 | ✅ ffmpeg 解码（倍速 / 变调 / 响度 / 十段均衡器）+ Java Sound 回退引擎 |
 | 歌词 | ✅ 本地 `.lrc` → 内嵌标签 → 在线歌词；**可选优先来源**（网易云 / 酷狗 / LRCLIB / AMLL TTML DB，各带默认偏移）；翻译、音译（罗马音）、逐行高亮、点击跳转、字号调节 |
 | 逐字歌词（卡拉OK） | ✅ 当前行按每个字的时间轴从左到右扫光：网易云 `yrc`、AMLL TTML、酷狗 KRC、增强型 LRC（`[mm:ss.xx]<mm:ss.xx>字`）都能取到逐字时间轴；没有逐字信息的歌词仍做整行高亮 |
+| Apple Music 风格歌词页 | ✅ 全屏歌词页：压暗的模糊封面背景、大字白色加粗、当前行放大 + 柔光、其余行按距离淡出、弹性滚动居中 |
 | 歌词第二行 | ✅ 翻译与音译互斥，播放页歌词界面右上角「译 / 音 / 原」一键循环切换 |
 | 歌词对齐 | ✅ 翻译 / 音译按容差匹配（±450 ms，略早的译文另有 2 s 兜底），自动过滤「作词: xxx」等制作信息行与「/」占位 |
 | 歌曲评论 | ✅ 网易云 / 哔哩哔哩原生评论（热门 + 最新，滚动加载更多、只读）；**内联表情、配图与大图预览、被引用楼层、楼中楼预览** |
@@ -230,6 +232,26 @@ Windows 实机（当前行「时而孩子模样」：「时而」已唱、主色
 
 逐字歌词的原始内容（yrc / TTML）不会被写进 `.lrc` 或音频标签：下载与「批量整理」写入的仍然是
 普通 LRC（`raw` 字段），逐字时间轴只在内存里用于渲染。
+
+### Apple Music 风格歌词页
+
+点播放页的「歌词」按钮进入全屏歌词页，样式按 Apple Music 的做法重做：
+
+- **背景是放大压暗的封面**：按 48 px 解码后拉伸，天然就是一层很重的柔焦，
+  再叠 55% 去饱和与自上而下的暗角 —— 不需要运行时高斯模糊，软件渲染也不掉帧；
+- **大字、白色、加粗**：当前行放大 1.05 倍并带柔光，其余行按距离淡出（1 行内 66%、2 行 46%、更远 30%）；
+- **逐字扫光**与当前行高亮同步，扫过的字是纯白，没唱到的字压到 40% 白；
+- **弹性滚动**：当前行始终停在可视区偏上三分之一的位置，切句时用弹簧动画滚过去，不是生硬跳转；
+- 翻译 / 音译作为第二行，跟随当前行一起淡入淡出。
+
+![Apple Music 风格歌词页](docs/screenshots/apple-lyrics.png)
+
+暂停在 0.15 进度时截的局部（「慵懒」已唱、纯白；其余未唱、压暗）：
+
+![Apple Music 歌词页局部](docs/screenshots/apple-lyrics-zoom.png)
+
+封面用「小尺寸解码 + 拉伸」代替模糊：`rememberArtwork(song, maxPx = 48)` 只产出 48×48 的位图，
+再以 `ContentScale.Crop` 铺满全屏，配合去饱和与暗角，观感和高斯模糊接近，但每帧的绘制成本几乎为零。
 
 ### 查看评论
 
@@ -442,8 +464,8 @@ Windows 把「漫游配置」和「本机数据」分成两棵树，本应用同
 ```powershell
 gradlew run                    # 直接运行
 gradlew createDistributable    # 免安装应用目录：build\compose\binaries\main\app\NeriPlayer\
-gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.12.0.msi
-gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.12.0.exe
+gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.13.0.msi
+gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.13.0.exe
 ```
 
 - `gradlew` 是批处理包装脚本，在 CMD / PowerShell 里直接写 `gradlew`（或 `.\gradlew.bat`）；

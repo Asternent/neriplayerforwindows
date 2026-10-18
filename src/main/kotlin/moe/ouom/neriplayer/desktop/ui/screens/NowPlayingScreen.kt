@@ -51,6 +51,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
@@ -253,7 +254,8 @@ fun NowPlayingScreen(
                                     onSeekLine = { container.player.seekTo(it) },
                                     modifier = Modifier.fillMaxSize(),
                                     positionMs = { positionState.value },
-                                    playing = state == PlaybackState.PLAYING,
+                                    // 全屏歌词页盖在上面时，侧栏歌词不用继续扫光（省一份重绘）
+                                    playing = state == PlaybackState.PLAYING && !showFullLyrics,
                                     wordByWord = settings.wordByWordLyrics,
                                 )
                             }
@@ -288,101 +290,66 @@ fun NowPlayingScreen(
         }
 
         if (showFullLyrics) {
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = MaterialTheme.colorScheme.background,
-            ) {
-                Column(Modifier.fillMaxSize()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(onClick = { showFullLyrics = false }) {
-                            Icon(Icons.Outlined.ArrowBack, contentDescription = "返回")
-                        }
-                        Text(
-                            text = song?.displayName().orEmpty(),
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = "字号 %.2fx".format(settings.lyricsFontScale),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        // 音译 / 翻译快捷切换：译文与音译互斥，按钮上的字就是当前第二行
-                        if (hasTranslation || hasPhonetic) {
-                            IconButton(onClick = {
-                                val next = nextLyricsSecondaryLineMode(secondaryLine, hasTranslation, hasPhonetic)
-                                container.settings.update { current ->
-                                    current.copy(
-                                        showLyricTranslation = next != LyricsSecondaryLineMode.NONE,
-                                        lyricTranslationUsePhonetic = next == LyricsSecondaryLineMode.PHONETIC,
-                                    )
-                                }
-                            }) {
-                                Text(
-                                    text = secondaryLine.shortLabel(),
-                                    color = if (secondaryLine == LyricsSecondaryLineMode.NONE) {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    } else {
-                                        MaterialTheme.colorScheme.primary
-                                    },
-                                    fontWeight = FontWeight.SemiBold,
+            AppleLyricsScreen(
+                song = song,
+                lines = lyrics.lines,
+                currentIndex = lyricIndex,
+                loading = lyricsLoading,
+                secondaryLine = secondaryLine,
+                fontScale = settings.lyricsFontScale,
+                positionMs = { positionState.value },
+                playing = state == PlaybackState.PLAYING,
+                wordByWord = settings.wordByWordLyrics,
+                onSeekLine = { container.player.seekTo(it) },
+                onBack = { showFullLyrics = false },
+                footer = song?.filePath?.takeIf { it.isNotBlank() },
+                trailing = {
+                    Text(
+                        text = "字号 %.2fx".format(settings.lyricsFontScale),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.7f),
+                    )
+                    // 音译 / 翻译快捷切换：译文与音译互斥，按钮上的字就是当前第二行
+                    if (hasTranslation || hasPhonetic) {
+                        IconButton(onClick = {
+                            val next = nextLyricsSecondaryLineMode(secondaryLine, hasTranslation, hasPhonetic)
+                            container.settings.update { current ->
+                                current.copy(
+                                    showLyricTranslation = next != LyricsSecondaryLineMode.NONE,
+                                    lyricTranslationUsePhonetic = next == LyricsSecondaryLineMode.PHONETIC,
                                 )
                             }
+                        }) {
+                            Text(
+                                text = secondaryLine.shortLabel(),
+                                color = if (secondaryLine == LyricsSecondaryLineMode.NONE) {
+                                    Color.White.copy(alpha = 0.6f)
+                                } else {
+                                    Color.White
+                                },
+                                fontWeight = FontWeight.SemiBold,
+                            )
                         }
-                        // 评论：本地歌曲没有可查的评论，按钮就不出现
-                        val commentSource = song?.source
-                        if (commentSource != null && commentSource != MediaSource.LOCAL) {
-                            IconButton(onClick = { showComments = true }) {
-                                Icon(Icons.Outlined.Comment, contentDescription = "评论")
-                            }
+                    }
+                    // 评论：本地歌曲没有可查的评论，按钮就不出现
+                    val commentSource = song?.source
+                    if (commentSource != null && commentSource != MediaSource.LOCAL) {
+                        IconButton(onClick = { showComments = true }) {
+                            Icon(Icons.Outlined.Comment, contentDescription = "评论")
                         }
-                        IconButton(onClick = {
-                            container.settings.update { current ->
-                                current.copy(lyricsFontScale = (current.lyricsFontScale + 0.1f).coerceAtMost(1.8f))
-                            }
-                        }) { Text("A+") }
-                        IconButton(onClick = {
-                            container.settings.update { current ->
-                                current.copy(lyricsFontScale = (current.lyricsFontScale - 0.1f).coerceAtLeast(0.7f))
-                            }
-                        }) { Text("A-") }
                     }
-                    // 横屏（宽窗口）下歌词正文限宽居中：一行拉满整个屏幕宽度会很难扫读
-                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                        LyricsPane(
-                            lines = lyrics.lines,
-                            currentIndex = lyricIndex,
-                            loading = lyricsLoading,
-                            fontScale = settings.lyricsFontScale,
-                            secondaryLine = secondaryLine,
-                            onSeekLine = { container.player.seekTo(it) },
-                            positionMs = { positionState.value },
-                            playing = state == PlaybackState.PLAYING,
-                            wordByWord = settings.wordByWordLyrics,
-                            modifier = if (isWideAppLayout) {
-                                Modifier.fillMaxHeight().widthIn(max = AppLyricsMaxWidth)
-                            } else {
-                                Modifier.fillMaxSize()
-                            },
-                        )
-                    }
-                    if (!song?.filePath.isNullOrBlank()) {
-                        Text(
-                            text = song?.filePath.orEmpty(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                        )
-                    }
-                }
-            }
+                    IconButton(onClick = {
+                        container.settings.update { current ->
+                            current.copy(lyricsFontScale = (current.lyricsFontScale + 0.1f).coerceAtMost(1.8f))
+                        }
+                    }) { Text("A+") }
+                    IconButton(onClick = {
+                        container.settings.update { current ->
+                            current.copy(lyricsFontScale = (current.lyricsFontScale - 0.1f).coerceAtLeast(0.7f))
+                        }
+                    }) { Text("A-") }
+                },
+            )
         }
 
         val commentSong = song
