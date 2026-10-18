@@ -40,6 +40,8 @@ class GitHubSyncManager(
     private val stats: StatsRepository,
     private val library: LibraryRepository,
     private val http: HttpService,
+    /** 本地删除墓碑：随同步上传，防止被远端的「并集」合并回来。 */
+    private val tombstones: SyncTombstoneStore,
 ) {
 
     private val _state = MutableStateFlow(
@@ -308,11 +310,23 @@ class GitHubSyncManager(
             )
         }
 
+        val snapshot = tombstones.snapshot()
         return SyncData(
             version = SYNC_DATA_VERSION,
             deviceId = cfg.deviceId,
             deviceName = "NeriPlayer Desktop",
-            playlists = playlists.userPlaylists().map(SyncMapping::toSyncPlaylist),
+            // 删除过的歌单也要上传（isDeleted），否则另一台设备会把它重新建出来
+            playlists = playlists.userPlaylists().map(SyncMapping::toSyncPlaylist) +
+                snapshot.playlistDeletions.map { deletion ->
+                    SyncPlaylist(
+                        id = deletion.id,
+                        isDeleted = true,
+                        createdAt = deletion.deletedAt,
+                        modifiedAt = deletion.deletedAt,
+                    )
+                },
+            playlistSongDeletions = snapshot.songDeletions,
+            recentPlayDeletions = snapshot.recentDeletions,
             favoritePlaylists = favoritePlaylists,
             recentPlays = history.entries.value.take(300).map { entry ->
                 SyncRecentPlay(
@@ -361,6 +375,11 @@ class GitHubSyncManager(
     // ------------------------------------------------------------------ 写回本地
 
     private fun applyToLocal(merged: SyncData) {
+        // 应用远端结果时不能记录本地删除墓碑，否则会把同步下来的删除又当成新删除上传
+        tombstones.withRecordingSuppressed { applyToLocalInternal(merged) }
+    }
+
+    private fun applyToLocalInternal(merged: SyncData) {
         val deletedIds = merged.playlists.filter { it.isDeleted }.map { it.id }.toSet()
         merged.playlists.filter { !it.isDeleted }.forEach { syncPlaylist ->
             val songs = syncPlaylist.songs.map(SyncMapping::fromSyncSong)

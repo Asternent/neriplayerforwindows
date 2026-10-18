@@ -20,8 +20,15 @@ class AppContainer {
 
     val settings = SettingsRepository()
     val library = LibraryRepository(settings)
-    val playlists = PlaylistRepository()
-    val history = HistoryRepository()
+    // 删除墓碑：本地删歌/删歌单/删历史后记录，避免同步时被远端「并集」合并回来
+    val syncTombstones = moe.ouom.neriplayer.desktop.sync.SyncTombstoneStore()
+    val playlists = PlaylistRepository(
+        onSongRemoved = { playlist, song -> syncTombstones.recordSongRemoved(playlist, song) },
+        onPlaylistDeleted = { playlist -> syncTombstones.recordPlaylistDeleted(playlist) },
+    )
+    val history = HistoryRepository(
+        onEntryRemoved = { song -> syncTombstones.recordRecentRemoved(song) },
+    )
     val stats = StatsRepository(history)
     val online = OnlineRepository()
     val http: moe.ouom.neriplayer.desktop.net.HttpService get() = online.httpService
@@ -58,6 +65,7 @@ class AppContainer {
         stats = stats,
         library = library,
         http = online.httpService,
+        tombstones = syncTombstones,
     )
     val neteaseLogin = moe.ouom.neriplayer.desktop.net.NeteaseLogin(online.httpService)
     val biliLogin = moe.ouom.neriplayer.desktop.net.BiliLogin(online.httpService)

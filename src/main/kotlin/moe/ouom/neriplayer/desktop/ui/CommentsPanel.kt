@@ -102,6 +102,8 @@ fun CommentsPanel(
     var loading by remember(song.key) { mutableStateOf(!isLocal) }
     var loadingMore by remember(song.key) { mutableStateOf(false) }
     var error by remember(song.key) { mutableStateOf<String?>(null) }
+    // B 站按页翻页：页码必须自己记住，不能用「已取条数 / 每页条数」反推
+    var page by remember(song.key) { mutableStateOf(1) }
     /** 正在放大预览的图片集合与下标。 */
     var preview by remember(song.key) { mutableStateOf<Pair<List<CommentImage>, Int>?>(null) }
 
@@ -113,22 +115,25 @@ fun CommentsPanel(
             loadingMore = true
         }
         val offset = if (reset) 0 else latest.size
-        val page = runCatching { container.online.comments(song, offset, pageSize) }.getOrNull()
+        val nextPage = if (reset) 1 else page + 1
+        val result = runCatching { container.online.comments(song, offset, pageSize, nextPage) }.getOrNull()
         when {
-            page == null -> if (reset) error = "暂时拿不到评论（可能是网络问题，或这首歌没有开放评论）"
-            page.error != null -> error = page.error
+            result == null -> if (reset) error = "暂时拿不到评论（可能是网络问题，或这首歌没有开放评论）"
+            result.error != null -> error = result.error
             reset -> {
-                hot = page.hot
-                latest = page.latest
-                total = page.total
-                hasMore = page.hasMore
+                hot = result.hot
+                latest = result.latest
+                total = result.total
+                hasMore = result.hasMore
+                page = nextPage
             }
             else -> {
                 // 追加时按评论 id 去重：接口在翻页边界上偶尔会重复返回同一条
                 val seen = latest.mapTo(HashSet()) { it.id }
-                latest = latest + page.latest.filter { seen.add(it.id) }
-                total = page.total
-                hasMore = page.hasMore
+                latest = latest + result.latest.filter { seen.add(it.id) }
+                total = result.total
+                hasMore = result.hasMore
+                page = nextPage
             }
         }
         loading = false

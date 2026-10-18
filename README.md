@@ -26,7 +26,7 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 | 安装包 | `.deb` | `.msi`（WiX Toolset v3 打包），另有免安装应用目录 |
 | 系统媒体控制 | MPRIS over D-Bus | WinRT **SMTC**（JNA 直调，见下文）驱动系统媒体浮层 / 锁屏显示；键盘媒体键由 Win32 全局热键接管 |
 | 系统托盘 | StatusNotifierItem + DBusMenu（另需系统 python3） | Windows 通知区域原生托盘（AWT `SystemTray`），无额外运行时依赖 |
-| 数据目录 | XDG（`~/.config`、`~/.local/share`、`~/.cache`） | `%APPDATA%\NeriPlayer`、`%LOCALAPPDATA%\NeriPlayer` |
+| 数据目录 | XDG（`~/.config`、`~/.local/share`、`~/.cache`） | `%APPDATA%\NeriPlayer`、`%LOCALAPPDATA%\NeriPlayerData` |
 | 界面缩放 | 探测 Xft.dpi / GDK_SCALE / QT_SCALE_FACTOR | 直接跟随 Windows 显示缩放，不会二次放大 |
 | ffmpeg | 由 deb 声明依赖，装完即在 PATH | 自动探测 winget / Chocolatey / Scoop 等常见安装位置 |
 | 打包依赖 | `dpkg`、桌面图标与 `.desktop` | WiX Toolset v3（只打包 MSI 时需要） |
@@ -39,9 +39,9 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 
 | 文件 | 说明 |
 | --- | --- |
-| `NeriPlayer-1.8.1.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
-| `NeriPlayer-1.8.1.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.8.1.msi` |
-| `NeriPlayer-1.8.1-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
+| `NeriPlayer-1.9.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
+| `NeriPlayer-1.9.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.9.0.msi` |
+| `NeriPlayer-1.9.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
 
 安装完成后从开始菜单启动「NeriPlayer」。
 
@@ -330,6 +330,11 @@ MediaStore/SAF 流程，桌面端直接读写文件系统，改为「分析 → 
 - **标签写副本**：下载与批量整理都是「复制一份 → 改副本 → 读回校验 → 原子替换」，
   改标签时崩溃也不会损坏原音频；
 - **配置原子写**：设置、同步配置等 JSON 先写临时文件再 `ATOMIC_MOVE` 替换，旧实现「先删后改名」在两步之间崩溃会丢配置。
+- **删除会同步出去**：从歌单删歌、取消收藏、删除历史或整个歌单时都会记录删除墓碑，
+  合并时不会再把它们从手机端「并集」回来（墓碑保留 60 天，最多 1200 条）；
+- **数据目录不在安装目录里**：曲库/历史/统计放在 `%LOCALAPPDATA%\NeriPlayerData`，
+  安装器升级/卸载不会碰它。1.9.0 之前的版本把数据放在安装目录（`%LOCALAPPDATA%\NeriPlayer`），
+  首次启动会自动复制到新目录并改写曲库里的缓存路径；旧文件保留，由安装器在下次升级时清理。
 - 设置页的「后台与系统控制」会实时显示两项状态：**系统通知区域**是否可用、
   **系统媒体控制**是否已接管以及当前后端
 
@@ -358,14 +363,14 @@ Windows 把「漫游配置」和「本机数据」分成两棵树，本应用同
 | `%APPDATA%\NeriPlayer\settings.json` | 设置、主题、队列与进度快照 |
 | `%APPDATA%\NeriPlayer\accounts.json` | 网易云 / 哔哩哔哩登录凭据 |
 | `%APPDATA%\NeriPlayer\sync.json` | GitHub 同步配置与 Token |
-| `%LOCALAPPDATA%\NeriPlayer\library.json` | 本地媒体库索引 |
-| `%LOCALAPPDATA%\NeriPlayer\playlists.json` | 歌单与「我喜欢的音乐」 |
-| `%LOCALAPPDATA%\NeriPlayer\history.json` | 最近播放 |
-| `%LOCALAPPDATA%\NeriPlayer\stats.json` | 播放统计 |
-| `%LOCALAPPDATA%\NeriPlayer\downloads.json` | 已下载歌曲目录索引 |
-| `%LOCALAPPDATA%\NeriPlayer\search_history.json` | 搜索历史 |
-| `%LOCALAPPDATA%\NeriPlayer\logs` | 运行日志 |
-| `%LOCALAPPDATA%\NeriPlayer\cache\artwork`、`covers` | 内嵌封面提取与在线封面缓存 |
+| `%LOCALAPPDATA%\NeriPlayerData\library.json` | 本地媒体库索引 |
+| `%LOCALAPPDATA%\NeriPlayerData\playlists.json` | 歌单与「我喜欢的音乐」 |
+| `%LOCALAPPDATA%\NeriPlayerData\history.json` | 最近播放 |
+| `%LOCALAPPDATA%\NeriPlayerData\stats.json` | 播放统计 |
+| `%LOCALAPPDATA%\NeriPlayerData\downloads.json` | 已下载歌曲目录索引 |
+| `%LOCALAPPDATA%\NeriPlayerData\search_history.json` | 搜索历史 |
+| `%LOCALAPPDATA%\NeriPlayerData\logs` | 运行日志 |
+| `%LOCALAPPDATA%\NeriPlayerData\cache\artwork`、`covers` | 内嵌封面提取与在线封面缓存 |
 
 - 实际路径会显示在「设置 → 关于」里（数据目录 / 缓存目录），把该路径粘进资源管理器的地址栏就能直接打开。
 - 企业环境里 `%APPDATA%` / `%LOCALAPPDATA%` 常被重定向到网络盘，应用一律通过这两个环境变量定位，不硬编码路径。
@@ -389,8 +394,8 @@ Windows 把「漫游配置」和「本机数据」分成两棵树，本应用同
 ```powershell
 gradlew run                    # 直接运行
 gradlew createDistributable    # 免安装应用目录：build\compose\binaries\main\app\NeriPlayer\
-gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.8.1.msi
-gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.8.1.exe
+gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.9.0.msi
+gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.9.0.exe
 ```
 
 - `gradlew` 是批处理包装脚本，在 CMD / PowerShell 里直接写 `gradlew`（或 `.\gradlew.bat`）；
@@ -479,8 +484,13 @@ Windows 默认会把新出现的图标收进**溢出区**：点任务栏上的 `
 Android 版请用 [cwuom/NeriPlayer](https://github.com/cwuom/NeriPlayer)。
 
 **升级新版本会不会丢设置和曲库？**
-不会。设置、账号、曲库、歌单、历史与统计都在 `%APPDATA%` / `%LOCALAPPDATA%` 里，与安装目录无关；
-MSI 使用固定的 `upgradeUuid`，覆盖升级即可。免安装版只要换掉程序目录，数据同样保留。
+不会（1.9.0 起）。设置、账号在 `%APPDATA%\NeriPlayer`，曲库、歌单、历史与统计在
+`%LOCALAPPDATA%\NeriPlayerData`，两者都在安装目录之外；MSI 使用固定的 `upgradeUuid`，覆盖升级即可。
+免安装版只要换掉程序目录，数据同样保留。
+
+> 1.8.x 及更早版本的曲库/历史/统计曾与安装目录重合（`%LOCALAPPDATA%\NeriPlayer`），
+> 升级时会被安装器清掉。1.9.0 首次启动会自动把旧数据复制到新目录；
+> 如果你是从 1.8.x 直接跳到 1.9.0，升级前建议先备份 `%LOCALAPPDATA%\NeriPlayer\*.json`。
 
 **能把数据放到 U 盘或应用目录旁边吗？**
 可以，用 `NERIPLAYER_CONFIG_HOME` / `NERIPLAYER_DATA_HOME` / `NERIPLAYER_CACHE_HOME` 三个环境变量，

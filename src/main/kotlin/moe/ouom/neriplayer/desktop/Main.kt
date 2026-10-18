@@ -48,6 +48,11 @@ fun main() {
     bootLog("main-enter")
     setupDesktopLookAndFeel()
     bootLog("look-and-feel")
+    // 旧版把数据放在安装目录里，MSI 升级会连数据一起删掉：启动前先搬到安装目录之外
+    moe.ouom.neriplayer.desktop.core.AppDirs.migrateLegacyData { message ->
+        println("[boot] 数据迁移：$message")
+    }
+    bootLog("data-migration")
     val container = AppContainer()
     bootLog("container-created")
     container.bootstrap()

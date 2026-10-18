@@ -13,7 +13,12 @@ import java.util.UUID
 const val FAVORITES_PLAYLIST_ID = "system:favorites"
 
 /** 歌单仓库：用户歌单 + 「我喜欢的音乐」。 */
-class PlaylistRepository {
+class PlaylistRepository(
+    /** 本地删除歌曲时回调（歌单删除前的一次快照），供同步层记录删除墓碑。 */
+    private val onSongRemoved: (Playlist, Song) -> Unit = { _, _ -> },
+    /** 删除整个歌单时回调。 */
+    private val onPlaylistDeleted: (Playlist) -> Unit = {},
+) {
 
     private val store = JsonFileStore(AppDirs.playlistFile, ListSerializer(Playlist.serializer())) { emptyList() }
     private val _playlists = MutableStateFlow<List<Playlist>>(emptyList())
@@ -64,8 +69,10 @@ class PlaylistRepository {
 
     fun deletePlaylist(id: String) {
         if (id == FAVORITES_PLAYLIST_ID) return
+        val removed = _playlists.value.firstOrNull { it.id == id } ?: return
         _playlists.value = _playlists.value.filterNot { it.id == id }
         persist()
+        runCatching { onPlaylistDeleted(removed) }
     }
 
     fun addSongs(id: String, songs: List<Song>) {
@@ -80,6 +87,8 @@ class PlaylistRepository {
     }
 
     fun removeSong(id: String, songKey: String) {
+        val owner = _playlists.value.firstOrNull { it.id == id }
+        val removed = owner?.songs?.firstOrNull { it.key == songKey }
         _playlists.value = _playlists.value.map { playlist ->
             if (playlist.id != id) return@map playlist
             playlist.copy(
@@ -88,6 +97,8 @@ class PlaylistRepository {
             )
         }
         persist()
+        // 记删除墓碑：否则下次同步会按「并集」把这首从手机端又合并回来
+        if (owner != null && removed != null) runCatching { onSongRemoved(owner, removed) }
     }
 
     fun moveSong(id: String, from: Int, to: Int) {
@@ -159,7 +170,10 @@ class PlaylistRepository {
 }
 
 /** 播放历史 / 继续播放。 */
-class HistoryRepository {
+class HistoryRepository(
+    /** 本地删除一条历史时回调，供同步层记录删除墓碑。 */
+    private val onEntryRemoved: (Song) -> Unit = {},
+) {
 
     private val store = JsonFileStore(AppDirs.historyFile, ListSerializer(UsageEntry.serializer())) { emptyList() }
     private val _entries = MutableStateFlow<List<UsageEntry>>(emptyList())
@@ -186,13 +200,17 @@ class HistoryRepository {
     }
 
     fun clear() {
+        val removed = _entries.value.map { it.song }
         _entries.value = emptyList()
         persist()
+        removed.forEach { runCatching { onEntryRemoved(it) } }
     }
 
     fun removeEntry(songKey: String) {
+        val removed = _entries.value.firstOrNull { it.song.key == songKey }?.song
         _entries.value = _entries.value.filterNot { it.song.key == songKey }
         persist()
+        if (removed != null) runCatching { onEntryRemoved(removed) }
     }
 
     /** 同步导入：写入一条最近播放记录（保留原时间）。 */

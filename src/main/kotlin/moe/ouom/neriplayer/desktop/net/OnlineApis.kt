@@ -574,16 +574,17 @@ class BiliApi(private val http: HttpService) {
     /**
      * 视频评论。
      *
-     * @param offset 已经取到的条数；B 站按页取，这里换算成页码。
+     * @param page 页码（从 1 开始）。B 站必须按页取：用「已取条数 ÷ 每页条数」反推页码，
+     *   一旦服务端返回的条数少于请求数，就会算出同一个页码、反复请求第一页。
      * @param sort 2 = 按热度，0 = 按时间。
      */
-    fun comments(bvid: String, limit: Int, offset: Int, sort: Int = 2): CommentPage? {
+    fun comments(bvid: String, page: Int, limit: Int, sort: Int = 2): CommentPage? {
         ensureCookies()
         val aid = aidOf(bvid) ?: return null
         val pageSize = limit.coerceAtLeast(1)
-        val page = offset / pageSize + 1
+        val safePage = page.coerceAtLeast(1)
         val text = http.get(
-            "https://api.bilibili.com/x/v2/reply?type=1&oid=$aid&sort=$sort&pn=$page&ps=$pageSize",
+            "https://api.bilibili.com/x/v2/reply?type=1&oid=$aid&sort=$sort&pn=$safePage&ps=$pageSize",
             headers,
         ) ?: return null
         val root = NeriJsonParser.parse(text).asObject() ?: return null
@@ -597,7 +598,7 @@ class BiliApi(private val http: HttpService) {
         val size = pageInfo?.long("size")?.toInt()?.takeIf { it > 0 } ?: pageSize
         // 用「请求的页码」而不是返回的 num 计算进度：匿名访问时接口可能返回 num=0，
         // 用它会把「还有下一页」算成「已经没有更多」，或者反过来一直翻页。
-        val loadedThrough = (page - 1).toLong() * size + items.size
+        val loadedThrough = (safePage - 1).toLong() * size + items.size
         // 明明还有评论却给了空页，说明这次响应被截断（未登录/风控），不能当成到底
         if (items.isEmpty() && total != null && loadedThrough < total) {
             return CommentPage(

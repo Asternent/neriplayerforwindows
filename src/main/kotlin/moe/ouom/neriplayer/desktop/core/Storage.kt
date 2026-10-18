@@ -47,7 +47,19 @@ object AppDirs {
     }
 
     val configDir: File by lazy { File(roaming, "NeriPlayer").apply { mkdirs() } }
-    val dataDir: File by lazy { File(local, "NeriPlayer").apply { mkdirs() } }
+
+    /**
+     * 曲库 / 缓存 / 日志。
+     *
+     * **必须放在安装目录之外**：per-user MSI 装到 `%LOCALAPPDATA%\NeriPlayer`，
+     * 而 Windows Installer 在升级/卸载时会清理该目录 —— 数据放在里面会在每次更新时被删掉。
+     * 这里改用同级的 `NeriPlayerData`，安装器不会碰它。
+     */
+    val dataDir: File by lazy { File(local, "NeriPlayerData").apply { mkdirs() } }
+
+    /** 1.9.0 之前的数据目录（与安装目录重合），仅用于一次性迁移。 */
+    private val legacyDataDir: File get() = File(local, "NeriPlayer")
+
     val cacheDir: File by lazy {
         val override = System.getenv("NERIPLAYER_CACHE_HOME")?.takeIf { it.isNotBlank() }
         (override?.let { File(it.trim()) } ?: File(dataDir, "cache")).apply { mkdirs() }
@@ -66,6 +78,67 @@ object AppDirs {
     val accountFile: File get() = File(configDir, "accounts.json")
     val syncConfigFile: File get() = File(configDir, "sync.json")
     val downloadCatalogFile: File get() = File(dataDir, "downloads.json")
+
+    /** 同步删除墓碑（本地删除后同步给其它设备，防止被远端合并回来）。 */
+    val syncTombstoneFile: File get() = File(dataDir, "sync_tombstones.json")
+
+    /**
+     * 把旧版放在安装目录里的数据搬出来。
+     *
+     * 必须在创建任何仓库（读取 JSON）之前调用一次。只复制不删除旧文件，
+     * 让安装器在下次升级时自然清掉旧目录；途中失败也不影响旧数据。
+     */
+    fun migrateLegacyData(notify: (String) -> Unit = {}) {
+        val legacy = legacyDataDir
+        if (!legacy.isDirectory) return
+        // 新目录已经就绪就不再动，避免每次启动重复搬运
+        if (File(dataDir, "library.json").isFile) return
+        val files = listOf(
+            "library.json", "playlists.json", "history.json", "stats.json",
+            "downloads.json", "search_history.json", "sync_tombstones.json",
+        ).map { File(legacy, it) }.filter { it.isFile }
+        val legacyCache = File(legacy, "cache")
+        if (files.isEmpty() && !legacyCache.isDirectory) return
+
+        files.forEach { source ->
+            runCatching {
+                source.copyTo(File(dataDir, source.name), overwrite = true)
+                notify("迁移 ${source.name}")
+            }.onFailure { notify("迁移 ${source.name} 失败：${it.message}") }
+        }
+        // 只在目标缓存还是空的时候搬：cacheDir 的 mkdirs 会先建目录，不能用「目录是否存在」判断
+        if (legacyCache.isDirectory && cacheDir.listFiles().isNullOrEmpty()) {
+            runCatching {
+                if (!legacyCache.renameTo(cacheDir)) {
+                    legacyCache.copyRecursively(cacheDir, overwrite = true)
+                }
+                notify("迁移封面缓存")
+            }.onFailure { notify("迁移缓存失败：${it.message}") }
+        }
+        // 曲库里记录的是旧缓存目录的绝对路径：路径跟着数据目录一起换掉，避免全部重新生成
+        rewriteLegacyPaths(File(dataDir, "library.json"), legacy, notify)
+    }
+
+    private fun rewriteLegacyPaths(libraryFile: File, legacy: File, notify: (String) -> Unit) {
+        if (!libraryFile.isFile) return
+        runCatching {
+            val text = libraryFile.readText()
+            val pairs = listOf(
+                File(legacy, "cache").absolutePath to cacheDir.absolutePath,
+                legacy.absolutePath to dataDir.absolutePath,
+            )
+            var updated = text
+            pairs.forEach { (from, to) ->
+                updated = updated
+                    .replace(from, to)
+                    .replace(from.replace("\\", "\\\\"), to.replace("\\", "\\\\"))
+            }
+            if (updated != text) {
+                libraryFile.writeText(updated)
+                notify("更新曲库里的缓存路径")
+            }
+        }.onFailure { notify("更新曲库路径失败：${it.message}") }
+    }
 }
 
 val NeriJson: Json = Json {

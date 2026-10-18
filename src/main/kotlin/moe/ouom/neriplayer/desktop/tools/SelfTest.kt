@@ -1044,6 +1044,129 @@ private fun checkDesktopSyncFeatures() {
         buildVersion,
     )
 
+    // 15. 删除墓碑：本地删掉的歌不能又被远端的「并集」合并回来
+    val tombSong = moe.ouom.neriplayer.desktop.sync.SyncSong(id = 1L, name = "删掉的歌", album = "专辑", addedAt = 1_000L)
+    val tombMerged = moe.ouom.neriplayer.desktop.sync.SyncMerger.merge(
+        moe.ouom.neriplayer.desktop.sync.SyncData(
+            playlists = listOf(
+                moe.ouom.neriplayer.desktop.sync.SyncPlaylist(id = 7L, name = "歌单", songs = emptyList(), modifiedAt = 2_000L),
+            ),
+            playlistSongDeletions = listOf(
+                moe.ouom.neriplayer.desktop.sync.SyncPlaylistSongDeletion(
+                    playlistId = 7L,
+                    songId = 1L,
+                    album = "专辑",
+                    deletedAt = 2_000L,
+                ),
+            ),
+        ),
+        moe.ouom.neriplayer.desktop.sync.SyncData(
+            playlists = listOf(
+                moe.ouom.neriplayer.desktop.sync.SyncPlaylist(
+                    id = 7L,
+                    name = "歌单",
+                    songs = listOf(tombSong),
+                    modifiedAt = 1_500L,
+                ),
+            ),
+        ),
+    )
+    check(
+        "sync-tombstone-removes-song",
+        tombMerged.playlists.first { it.id == 7L }.songs.isEmpty(),
+        "songs=${tombMerged.playlists.first { it.id == 7L }.songs.size}",
+    )
+
+    // 删除之后又重新加入的歌（addedAt 晚于 deletedAt）必须保留
+    val readdedMerged = moe.ouom.neriplayer.desktop.sync.SyncMerger.merge(
+        moe.ouom.neriplayer.desktop.sync.SyncData(
+            playlists = listOf(
+                moe.ouom.neriplayer.desktop.sync.SyncPlaylist(
+                    id = 7L,
+                    name = "歌单",
+                    songs = listOf(tombSong.copy(addedAt = 3_000L)),
+                    modifiedAt = 3_000L,
+                ),
+            ),
+        ),
+        moe.ouom.neriplayer.desktop.sync.SyncData(
+            playlists = listOf(
+                moe.ouom.neriplayer.desktop.sync.SyncPlaylist(
+                    id = 7L,
+                    name = "歌单",
+                    songs = emptyList(),
+                    modifiedAt = 1_500L,
+                ),
+            ),
+            playlistSongDeletions = listOf(
+                moe.ouom.neriplayer.desktop.sync.SyncPlaylistSongDeletion(
+                    playlistId = 7L,
+                    songId = 1L,
+                    album = "专辑",
+                    deletedAt = 2_000L,
+                ),
+            ),
+        ),
+    )
+    check(
+        "sync-tombstone-keeps-readded",
+        readdedMerged.playlists.first { it.id == 7L }.songs.size == 1,
+        "songs=${readdedMerged.playlists.first { it.id == 7L }.songs.size}",
+    )
+
+    // 16. B 站曲目身份不能全靠 id=0：两首不同的 bvid 必须是两个身份
+    val biliA = Song(
+        key = "bili:BV1AA",
+        source = MediaSource.BILIBILI,
+        remoteId = "BV1AA",
+        title = "A",
+        album = "哔哩哔哩",
+    )
+    val biliB = biliA.copy(key = "bili:BV1BB", remoteId = "BV1BB", title = "B")
+    check(
+        "sync-bili-identity-unique",
+        moe.ouom.neriplayer.desktop.sync.SyncMapping.identityKey(biliA) !=
+            moe.ouom.neriplayer.desktop.sync.SyncMapping.identityKey(biliB),
+        "${moe.ouom.neriplayer.desktop.sync.SyncMapping.identityKey(biliA)} vs " +
+            moe.ouom.neriplayer.desktop.sync.SyncMapping.identityKey(biliB),
+    )
+    val biliRoundTrip = moe.ouom.neriplayer.desktop.sync.SyncMapping.fromSyncSong(
+        moe.ouom.neriplayer.desktop.sync.SyncMapping.toSyncSong(biliA),
+    )
+    check(
+        "sync-bili-roundtrip",
+        biliRoundTrip.source == MediaSource.BILIBILI && biliRoundTrip.remoteId == "BV1AA",
+        "source=${biliRoundTrip.source} remoteId=${biliRoundTrip.remoteId}",
+    )
+
+    // 17. 墓碑存储：记录、去重、抑制
+    val tombFile = java.io.File(System.getProperty("java.io.tmpdir"), "neri-selftest-tombstones.json")
+    tombFile.delete()
+    val tombStore = moe.ouom.neriplayer.desktop.sync.SyncTombstoneStore(tombFile)
+    val tombPlaylist = moe.ouom.neriplayer.desktop.core.Playlist(
+        id = "aaaa",
+        name = "测试",
+        songs = listOf(biliA),
+        updatedAt = 1L,
+    )
+    tombStore.recordSongRemoved(tombPlaylist, biliA, now = 1_000L)
+    tombStore.recordSongRemoved(tombPlaylist, biliA, now = 2_000L)
+    check(
+        "sync-tombstone-store-dedup",
+        tombStore.snapshot().songDeletions.size == 1 &&
+            tombStore.snapshot().songDeletions.first().deletedAt == 2_000L,
+        "${tombStore.snapshot().songDeletions.size}",
+    )
+    tombStore.withRecordingSuppressed {
+        tombStore.recordSongRemoved(tombPlaylist, biliA, now = 3_000L)
+    }
+    check(
+        "sync-tombstone-store-suppressed",
+        tombStore.snapshot().songDeletions.size == 1,
+        "${tombStore.snapshot().songDeletions.size}",
+    )
+    tombFile.delete()
+
     log("desktop sync checks done")
 }
 

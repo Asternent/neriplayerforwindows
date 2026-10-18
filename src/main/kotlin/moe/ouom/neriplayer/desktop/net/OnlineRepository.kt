@@ -137,16 +137,16 @@ class OnlineRepository(private val http: HttpService = HttpService()) {
     }
 
     /**
-     * 歌曲评论。[offset] 是已经取到的条数，两个平台都按它换算分页。
+     * 歌曲评论。[offset] 是已经取到的条数（网易云按偏移翻页），[page] 是页码（B 站按页翻页）。
      * 本地歌曲没有可查的评论，返回 null。
      */
-    suspend fun comments(song: Song, offset: Int, limit: Int): CommentPage? = withContext(Dispatchers.IO) {
+    suspend fun comments(song: Song, offset: Int, limit: Int, page: Int = 1): CommentPage? = withContext(Dispatchers.IO) {
         when (song.source) {
             MediaSource.NETEASE -> song.remoteId?.takeIf { it.isNotBlank() }
                 ?.let { netease.comments(it, limit, offset) }
 
             MediaSource.BILIBILI -> song.remoteId?.takeIf { it.isNotBlank() }
-                ?.let { bilibili.comments(it, limit, offset) }
+                ?.let { bilibili.comments(it, page, limit) }
 
             MediaSource.LOCAL, MediaSource.YOUTUBE -> null
         }

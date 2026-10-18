@@ -18,8 +18,20 @@ object SyncMapping {
 
     fun songSyncId(song: Song): Long = song.remoteId?.toLongOrNull() ?: 0L
 
-    fun songMediaUri(song: Song): String? = song.filePath?.let { path ->
-        if (path.startsWith("file://")) path else "file://$path"
+    /**
+     * 歌曲的「媒体地址」标识。
+     *
+     * 本地文件用 `file://`；哔哩哔哩的 remoteId 是 bvid（非数字），
+     * 直接用它算同步 ID 会得到 0，导致同一歌单里所有 B 站歌曲身份相同、被合并成一首。
+     * 这里把 bvid 编码进 mediaUri（`bili:BV...`），身份键仍然保持 `id|album|mediaUri` 的格式。
+     */
+    fun songMediaUri(song: Song): String? = when (song.source) {
+        MediaSource.LOCAL -> song.filePath?.let { path ->
+            if (path.startsWith("file://")) path else "file://$path"
+        }
+
+        MediaSource.BILIBILI -> song.remoteId?.takeIf { it.isNotBlank() }?.let { "bili:$it" }
+        else -> null
     }
 
     fun identityKey(song: Song): String = identityKey(songSyncId(song), song.album, songMediaUri(song))
@@ -55,6 +67,8 @@ object SyncMapping {
         mediaUri = songMediaUri(song),
         addedAt = song.dateAdded,
         matchedLyric = song.lyrics,
+        // B 站歌曲没有数字 ID：把 bvid 放进 channelId，另一台设备才能还原成可播放的曲目
+        channelId = song.remoteId?.takeIf { it.isNotBlank() && song.source == MediaSource.BILIBILI },
         syncMetadataVersion = CURRENT_SYNC_METADATA_VERSION,
     )
 
@@ -64,6 +78,7 @@ object SyncMapping {
             ?.takeIf { it.startsWith("file://") }
             ?.removePrefix("file://")
         val biliHint = sync.channelId ?: sync.audioId ?: sync.subAudioId
+            ?: mediaUri?.takeIf { it.startsWith("bili:") }?.removePrefix("bili:")
         val source = when {
             filePath != null -> MediaSource.LOCAL
             biliHint != null -> MediaSource.BILIBILI

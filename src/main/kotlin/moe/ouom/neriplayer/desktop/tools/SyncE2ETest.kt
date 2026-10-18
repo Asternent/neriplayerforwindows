@@ -78,7 +78,17 @@ fun main() = runBlocking {
                 )
             }
         }
-        val manager = GitHubSyncManager(store, playlists, history, stats, library, http)
+        val manager = GitHubSyncManager(
+            store,
+            playlists,
+            history,
+            stats,
+            library,
+            http,
+            moe.ouom.neriplayer.desktop.sync.SyncTombstoneStore(
+                java.io.File(System.getProperty("java.io.tmpdir"), "neri-e2e-tombstones.json"),
+            ),
+        )
 
         val song = Song(
             key = neteaseSongKey(186016L),
