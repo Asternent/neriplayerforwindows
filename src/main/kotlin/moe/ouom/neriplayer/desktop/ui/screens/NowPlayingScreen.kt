@@ -73,11 +73,14 @@ import moe.ouom.neriplayer.desktop.core.RepeatMode
 import moe.ouom.neriplayer.desktop.core.currentLyricIndex
 import moe.ouom.neriplayer.desktop.ui.EmptyState
 import moe.ouom.neriplayer.desktop.ui.CommentsPanel
+import moe.ouom.neriplayer.desktop.ui.KaraokeLyricText
 import moe.ouom.neriplayer.desktop.ui.LyricsPane
 import moe.ouom.neriplayer.desktop.ui.LyricsSecondaryLineMode
 import moe.ouom.neriplayer.desktop.ui.hasLyricPhonetic
 import moe.ouom.neriplayer.desktop.ui.hasLyricTranslation
+import moe.ouom.neriplayer.desktop.ui.karaokeSpec
 import moe.ouom.neriplayer.desktop.ui.nextLyricsSecondaryLineMode
+import moe.ouom.neriplayer.desktop.ui.rememberSmoothLyricPosition
 import moe.ouom.neriplayer.desktop.ui.resolveLyricsSecondaryLineMode
 import moe.ouom.neriplayer.desktop.ui.shortLabel
 import moe.ouom.neriplayer.desktop.ui.PlaybackEffectsPanel
@@ -249,6 +252,9 @@ fun NowPlayingScreen(
                                     secondaryLine = secondaryLine,
                                     onSeekLine = { container.player.seekTo(it) },
                                     modifier = Modifier.fillMaxSize(),
+                                    positionMs = { positionState.value },
+                                    playing = state == PlaybackState.PLAYING,
+                                    wordByWord = settings.wordByWordLyrics,
                                 )
                             }
                         }
@@ -355,6 +361,9 @@ fun NowPlayingScreen(
                             fontScale = settings.lyricsFontScale,
                             secondaryLine = secondaryLine,
                             onSeekLine = { container.player.seekTo(it) },
+                            positionMs = { positionState.value },
+                            playing = state == PlaybackState.PLAYING,
+                            wordByWord = settings.wordByWordLyrics,
                             modifier = if (isWideAppLayout) {
                                 Modifier.fillMaxHeight().widthIn(max = AppLyricsMaxWidth)
                             } else {
@@ -711,6 +720,8 @@ private fun PlayerCore(
 private fun CoverLyricsLine(container: AppContainer) {
     val lyrics by container.player.lyrics.collectAsState()
     val positionState = container.player.positionMs.collectAsState()
+    val playbackState by container.player.state.collectAsState()
+    val settings by container.settings.state.collectAsState()
     val index by remember(lyrics) {
         androidx.compose.runtime.derivedStateOf {
             currentLyricIndex(lyrics.lines, positionState.value)
@@ -718,13 +729,27 @@ private fun CoverLyricsLine(container: AppContainer) {
     }
     if (lyrics.lines.isEmpty()) return
     val line = lyrics.lines.getOrNull(index) ?: return
-    Text(
+    val playing = playbackState == PlaybackState.PLAYING
+    val smoothPosition = rememberSmoothLyricPosition(
+        positionMs = { positionState.value },
+        playing = playing && settings.wordByWordLyrics && line.hasWordTiming,
+    )
+    val karaoke = if (settings.wordByWordLyrics) line.karaokeSpec(smoothPosition) else null
+    KaraokeLyricText(
         text = line.text,
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.primary,
-        maxLines = 2,
-        textAlign = TextAlign.Center,
+        style = MaterialTheme.typography.titleMedium.copy(
+            // 有逐字时底色压暗、由扫光上色；没有逐字时保持原来的主色
+            color = if (karaoke == null) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            textAlign = TextAlign.Center,
+        ),
+        activeColor = MaterialTheme.colorScheme.primary,
+        karaoke = karaoke,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+        maxLines = 2,
     )
 }
 

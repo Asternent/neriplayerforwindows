@@ -225,6 +225,13 @@ data class AppSettings(
      */
     val lyricTranslationUsePhonetic: Boolean = false,
     /**
+     * 逐字歌词（卡拉OK 扫光）。
+     *
+     * 网易云 yrc、AMLL TTML、酷狗 KRC 与增强型 LRC 都带每个字的时间轴，
+     * 打开后当前行会按进度从左到右扫光；没有逐字信息的歌词仍然只做整行高亮。
+     */
+    val wordByWordLyrics: Boolean = true,
+    /**
      * 优先歌词来源：AUTO / NETEASE / KUGOU / LRCLIB / AMLL。
      * 非 AUTO 时会先去该来源查一次（只对在线歌曲生效，本地歌曲仍以自己的 .lrc 为准）。
      */

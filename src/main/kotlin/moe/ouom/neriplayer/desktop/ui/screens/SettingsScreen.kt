@@ -531,6 +531,13 @@ fun SettingsScreen(
                     onCheckedChange = { value -> container.settings.update { current -> current.copy(coverShowsLyrics = value) } },
                 )
                 SwitchRow(
+                    title = "逐字歌词（卡拉OK）",
+                    description = "当前行按每个字的时间轴从左到右扫光；网易云、AMLL TTML、酷狗与增强型 LRC 支持，" +
+                        "没有逐字信息的歌词仍然只做整行高亮",
+                    checked = settings.wordByWordLyrics,
+                    onCheckedChange = { value -> container.settings.update { current -> current.copy(wordByWordLyrics = value) } },
+                )
+                SwitchRow(
                     title = "显示“正在播放”标题",
                     description = "控制播放页顶部是否显示标题",
                     checked = settings.showNowPlayingTitle,

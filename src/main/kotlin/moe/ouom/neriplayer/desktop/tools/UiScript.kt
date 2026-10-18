@@ -2,6 +2,7 @@ package moe.ouom.neriplayer.desktop.tools
 
 import kotlinx.coroutines.delay
 import moe.ouom.neriplayer.desktop.core.AppContainer
+import moe.ouom.neriplayer.desktop.core.progressAt
 
 /**
  * 界面自动化脚本：用于在没有输入合成能力的环境中驱动界面完成运行测试。
@@ -104,6 +105,20 @@ suspend fun runUiScript(
                 } else {
                     container.player.setQueue(songs, 0, autoPlay = true)
                     host.log("online playing: ${songs.first().displayName()} - ${songs.first().artistText()}")
+                }
+            }
+
+            // 按网易云歌曲 id 直接播放：验证歌词 / 逐字时间轴这类功能时，
+            // 搜索结果可能挑到别的版本，用 id 才能确保测的是同一首
+            "play-netease" -> {
+                val id = command.argument.trim()
+                val song = runCatching { container.online.netease.songDetail(id) }.getOrNull()
+                if (song == null) {
+                    host.log("FAIL play-netease: 取不到歌曲 $id")
+                    ok = false
+                } else {
+                    container.player.setQueue(listOf(song), 0, autoPlay = true)
+                    host.log("netease playing id=$id ${song.displayName()} - ${song.artistText()}")
                 }
             }
 
@@ -255,11 +270,17 @@ suspend fun runUiScript(
             // 自动化验证播放进度与歌词行：排查「歌词不滚动 / 时长不显示」这类界面问题
             "playback" -> {
                 val player = container.player
-                val lines = player.lyrics.value.lines
+                val lyrics = player.lyrics.value
+                val lines = lyrics.lines
+                val position = player.positionMs.value
+                val index = moe.ouom.neriplayer.desktop.core.currentLyricIndex(lines, position)
+                val active = lines.getOrNull(index)
                 host.log(
-                    "playback pos=${player.positionMs.value} dur=${player.durationMs.value} " +
-                        "state=${player.state.value} lines=${lines.size} " +
-                        "index=${moe.ouom.neriplayer.desktop.core.currentLyricIndex(lines, player.positionMs.value)}",
+                    "playback pos=$position dur=${player.durationMs.value} " +
+                        "state=${player.state.value} lines=${lines.size} index=$index " +
+                        "wordLines=${lines.count { it.hasWordTiming }} " +
+                        "words=${active?.words?.size ?: 0} " +
+                        "progress=${active?.let { "%.3f".format(it.progressAt(position)) } ?: "n/a"}",
                 )
             }
             "mem-report" -> {

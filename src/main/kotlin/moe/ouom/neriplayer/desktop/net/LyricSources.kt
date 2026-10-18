@@ -1,7 +1,12 @@
 package moe.ouom.neriplayer.desktop.net
 
+import moe.ouom.neriplayer.desktop.core.LyricFormat
+import moe.ouom.neriplayer.desktop.core.LyricLine
 import moe.ouom.neriplayer.desktop.core.MediaSource
 import moe.ouom.neriplayer.desktop.core.Song
+import moe.ouom.neriplayer.desktop.core.TtmlParser
+import moe.ouom.neriplayer.desktop.core.YrcParser
+import moe.ouom.neriplayer.desktop.core.lyricsToLrc
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -47,10 +52,15 @@ enum class LyricSource(val id: String, val displayName: String) {
 
 /** 一次歌词查询的结果：原文 + 翻译 + 音译。 */
 data class LyricQueryResult(
+    /** 行级 LRC：可内嵌到标签、也可作为 .lrc 下载，任何时候都保持这个格式。 */
     val raw: String,
     val translated: String? = null,
     val romanized: String? = null,
     val source: String,
+    /** 逐字原始内容（网易云 yrc / TTML）；为空表示这个来源没有逐字时间轴。 */
+    val wordRaw: String? = null,
+    /** [wordRaw] 的格式。 */
+    val wordFormat: LyricFormat = LyricFormat.YRC,
 )
 
 /**
@@ -137,11 +147,11 @@ class LrclibProvider(private val http: HttpService) {
 }
 
 /**
- * 酷狗歌词：`lyrics.kugou.com/search` 搜候选 → `lyrics.kugou.com/download` 取 LRC。
+ * 酷狗歌词：`lyrics.kugou.com/search` 搜候选 → `lyrics.kugou.com/download` 取歌词。
  *
+ * 优先要 **KRC**（逐字时间轴，转换后走 yrc 解析），没有 KRC 才退回 LRC。
  * 上游 Android 版会先经过 `mobilecdn.kugou.com` 拿 hash 再搜，这里直接用
  * 「标题 + 歌手 + 时长」查询歌词库，少一次请求（已实测可用）。
- * 下载接口返回 base64 编码的 LRC 文本，需要解码一次。
  */
 class KugouProvider(private val http: HttpService) {
 
@@ -153,10 +163,11 @@ class KugouProvider(private val http: HttpService) {
     suspend fun fetch(song: Song): LyricQueryResult? {
         val title = song.title.ifBlank { return null }
         val artist = primaryArtist(song.artist)
-        val keyword = if (artist.isBlank()) title else "$title $artist"
+        val keyword = if (artist.isBlank()) title else "$artist - $title"
+        // 不要在搜索请求里带 duration：接口会按它硬过滤，候选一旦时长标注不准就全没了。
+        // 时长交给本地 durationMatches 判断。
         val searchUrl = "https://lyrics.kugou.com/search?ver=1&man=yes&client=pc" +
-            "&keyword=${urlEncode(keyword)}" +
-            (if (song.durationMs > 0L) "&duration=${song.durationMs}" else "")
+            "&keyword=${urlEncode(keyword)}"
         val root = NeriJsonParser.parse(http.get(searchUrl, headers) ?: return null).asObject() ?: return null
         val candidates = root.array("candidates")?.objects().orEmpty()
             .filter { it.str("id") != null && it.str("accesskey") != null }
@@ -177,16 +188,39 @@ class KugouProvider(private val http: HttpService) {
 
         val id = best.str("id") ?: return null
         val accessKey = best.str("accesskey") ?: return null
-        val downloadUrl = "https://lyrics.kugou.com/download?ver=1&client=pc" +
-            "&id=$id&accesskey=$accessKey&fmt=lrc&charset=utf8"
-        val payload = NeriJsonParser.parse(http.get(downloadUrl, headers) ?: return null).asObject() ?: return null
-        val content = payload.str("content") ?: return null
-        val raw = runCatching { String(java.util.Base64.getDecoder().decode(content), Charsets.UTF_8) }
+
+        // 1) 逐字：KRC
+        val krcPayload = download(id, accessKey, fmt = "krc", client = "mobi")
+        if (krcPayload != null) {
+            KugouKrc.decode(krcPayload)?.let { decoded ->
+                val lines = YrcParser.parse(decoded.yrc)
+                if (lines.any { it.hasWordTiming }) {
+                    return LyricQueryResult(
+                        raw = lyricsToLrc(lines),
+                        translated = decoded.translatedLrc,
+                        source = "酷狗",
+                        wordRaw = decoded.yrc,
+                        wordFormat = LyricFormat.YRC,
+                    )
+                }
+            }
+        }
+
+        // 2) 退回行级 LRC
+        val lrcPayload = download(id, accessKey, fmt = "lrc", client = "pc") ?: return null
+        val raw = runCatching { String(java.util.Base64.getDecoder().decode(lrcPayload), Charsets.UTF_8) }
             .getOrNull()
             ?.removePrefix("\uFEFF")
             ?.takeIf { it.isNotBlank() }
             ?: return null
         return LyricQueryResult(raw = raw, source = "酷狗")
+    }
+
+    private fun download(id: String, accessKey: String, fmt: String, client: String): String? {
+        val url = "https://lyrics.kugou.com/download?ver=1&client=$client" +
+            "&id=$id&accesskey=$accessKey&fmt=$fmt&charset=utf8"
+        val payload = NeriJsonParser.parse(http.get(url, headers) ?: return null).asObject() ?: return null
+        return payload.str("content")?.takeIf { it.isNotBlank() }
     }
 }
 
@@ -244,8 +278,16 @@ class AmllProvider(private val http: HttpService) {
         // 文件名里可能有空格 / # / ？：必须编码，否则 URI 非法、请求会静默失败
         val encodedFile = java.net.URLEncoder.encode(file, Charsets.UTF_8).replace("+", "%20")
         val ttml = http.get("https://amlldb.bikonoo.com/raw-lyrics/$encodedFile", headers, timeoutSeconds = 20) ?: return null
-        val raw = parseTtml(ttml).takeIf { it.isNotBlank() } ?: return null
-        return LyricQueryResult(raw = raw, source = "AMLL TTML DB")
+        val parsed = TtmlParser.parse(ttml)
+        if (parsed.lines.isEmpty()) return null
+        // raw 保持 LRC（下载 / 内嵌标签都靠它），逐字时间轴走 wordRaw
+        val raw = TtmlParser.toLrc(parsed).takeIf { it.isNotBlank() } ?: return null
+        return LyricQueryResult(
+            raw = raw,
+            source = "AMLL TTML DB",
+            wordRaw = ttml,
+            wordFormat = LyricFormat.TTML,
+        )
     }
 
     /** 极小范围的 JSON POST：只为 AMLL 的搜索接口服务。 */
@@ -279,83 +321,6 @@ class AmllProvider(private val http: HttpService) {
             }
         }
         append('"')
-    }
-
-    companion object {
-
-        private val paragraphRegex = Regex(
-            "<p\\b([^>]*)>(.*?)</p>",
-            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
-        )
-        private val beginRegex = Regex("""begin\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
-        private val tagRegex = Regex("<[^>]+>")
-
-        /** AMLL 的翻译 / 音译是带 `ttm:role` 的内层 span，不能和正文拼在一起。 */
-        private val roleSpanRegex = Regex(
-            """<span\b[^>]*ttm:role\s*=\s*"x-(translation|romanization)"[^>]*>(.*?)</span>""",
-            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
-        )
-
-        /** 把 TTML 转成 LRC 文本，复用现成的 LrcParser。 */
-        fun parseTtml(ttml: String): String {
-            val builder = StringBuilder()
-            paragraphRegex.findAll(ttml).forEach { match ->
-                val begin = beginRegex.find(match.groupValues[1])?.groupValues?.get(1) ?: return@forEach
-                val timeMs = parseTimeMs(begin) ?: return@forEach
-                val paragraph = match.groupValues[2]
-                // 先摘出翻译 span，正文里只留原文，避免整句翻译被拼进原文
-                val translations = ArrayList<String>()
-                roleSpanRegex.findAll(paragraph).forEach { span ->
-                    if (span.groupValues[1].equals("translation", ignoreCase = true)) {
-                        val translated = decodeEntities(span.groupValues[2].replace(tagRegex, "")).trim()
-                        if (translated.isNotEmpty()) translations += translated
-                    }
-                }
-                val mainHtml = roleSpanRegex.replace(paragraph, "")
-                val text = decodeEntities(mainHtml.replace(tagRegex, "")).trim()
-                if (text.isEmpty() && translations.isEmpty()) return@forEach
-                val stamp = "[%02d:%02d.%03d]".format(
-                    // 保留到毫秒：LRC 支持三位小数，写成两位会白白丢掉最多 9ms 的对齐精度
-                    timeMs / 60_000L,
-                    timeMs / 1_000L % 60L,
-                    timeMs % 1_000L,
-                )
-                builder.append(stamp).append(text).append('\n')
-                // 翻译行用相同时间戳：LrcParser 会把同时间戳的第二行识别为翻译
-                translations.forEach { builder.append(stamp).append(it).append('\n') }
-            }
-            return builder.toString()
-        }
-
-        /** 支持 `hh:mm:ss.mmm`、`mm:ss.mmm` 与 `mm:ss,fff` 三种写法。 */
-        private fun parseTimeMs(raw: String): Long? {
-            val parts = raw.trim().split(':')
-            if (parts.size < 2) return null
-            return runCatching {
-                val seconds = parts.last().replace(',', '.').toDouble()
-                val minutes = parts[parts.size - 2].toLong()
-                val hours = if (parts.size >= 3) parts[parts.size - 3].toLong() else 0L
-                ((hours * 3600L + minutes * 60L) * 1000L) + (seconds * 1000).toLong()
-            }.getOrNull()
-        }
-
-        private fun decodeEntities(value: String): String {
-            val named = value
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&quot;", "\"")
-                .replace("&apos;", "'")
-                .replace("&nbsp;", " ")
-                .replace("&amp;", "&")
-            // 数字实体（&#39; / &#x2019;）之前会原样显示
-            return Regex("""&#(x?[0-9a-fA-F]+);""").replace(named) { match ->
-                val raw = match.groupValues[1]
-                val code = runCatching {
-                    if (raw.startsWith("x", ignoreCase = true)) raw.drop(1).toInt(16) else raw.toInt()
-                }.getOrNull()
-                code?.takeIf { it in 0..0x10FFFF }?.let { String(Character.toChars(it)) } ?: match.value
-            }
-        }
     }
 }
 

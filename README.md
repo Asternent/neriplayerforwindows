@@ -39,9 +39,9 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 
 | 文件 | 说明 |
 | --- | --- |
-| `NeriPlayer-1.11.1.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
-| `NeriPlayer-1.11.1.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.11.1.msi` |
-| `NeriPlayer-1.11.1-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
+| `NeriPlayer-1.12.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
+| `NeriPlayer-1.12.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.12.0.msi` |
+| `NeriPlayer-1.12.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
 
 安装完成后从开始菜单启动「NeriPlayer」。
 
@@ -77,7 +77,7 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 | 首页：继续播放 / 推荐 / 热歌榜 <br> ![首页](docs/screenshots/home.png) | 探索：多源搜索与风格标签 <br> ![探索](docs/screenshots/explore.png) |
 | 媒体库：本地 / 收藏 / 在线音源 <br> ![媒体库](docs/screenshots/library.png) | 播放页：封面、进度、音效与队列 <br> ![播放页](docs/screenshots/nowplaying.png) |
 | 歌词页：逐行高亮与翻译 <br> ![歌词](docs/screenshots/lyrics.png) | 播放队列：排序 / 移除 / 跳转 <br> ![队列](docs/screenshots/queue.png) |
-| 悬浮歌词（描边样式，可拖动定位） <br> ![悬浮歌词](docs/screenshots/floating-lyrics.png) | 哔哩哔哩收藏夹 <br> ![B站收藏夹](docs/screenshots/bilibili-favorites.png) |
+| 逐字歌词：当前行按字扫光 <br> ![逐字歌词](docs/screenshots/word-lyrics.png) | 悬浮歌词（描边样式，可拖动定位） <br> ![悬浮歌词](docs/screenshots/floating-lyrics.png) |
 | 设置 → 账号：网易云 / 哔哩哔哩扫码登录 <br> ![账号](docs/screenshots/settings.png) | 设置 → 同步：GitHub 跨设备同步 <br> ![同步](docs/screenshots/github-sync.png) |
 | 托盘控制面板：封面、进度、传输控制与音量 <br> ![托盘面板](docs/screenshots/tray-panel.png) | 同一面板的深色主题 <br> ![托盘面板深色](docs/screenshots/tray-panel-dark.png) |
 | 横屏 · 首页：推荐与热歌卡片两两并排 <br> ![横屏首页](docs/screenshots/landscape-home.png) | 横屏 · 设置：两栏排版，不用滚很久 <br> ![横屏设置](docs/screenshots/landscape-settings.png) |
@@ -120,6 +120,7 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 | 本地媒体库 | ✅ 文件夹扫描、读取标签与内嵌封面、搜索与排序 |
 | 播放引擎 | ✅ ffmpeg 解码（倍速 / 变调 / 响度 / 十段均衡器）+ Java Sound 回退引擎 |
 | 歌词 | ✅ 本地 `.lrc` → 内嵌标签 → 在线歌词；**可选优先来源**（网易云 / 酷狗 / LRCLIB / AMLL TTML DB，各带默认偏移）；翻译、音译（罗马音）、逐行高亮、点击跳转、字号调节 |
+| 逐字歌词（卡拉OK） | ✅ 当前行按每个字的时间轴从左到右扫光：网易云 `yrc`、AMLL TTML、酷狗 KRC、增强型 LRC（`[mm:ss.xx]<mm:ss.xx>字`）都能取到逐字时间轴；没有逐字信息的歌词仍做整行高亮 |
 | 歌词第二行 | ✅ 翻译与音译互斥，播放页歌词界面右上角「译 / 音 / 原」一键循环切换 |
 | 歌词对齐 | ✅ 翻译 / 音译按容差匹配（±450 ms，略早的译文另有 2 s 兜底），自动过滤「作词: xxx」等制作信息行与「/」占位 |
 | 歌曲评论 | ✅ 网易云 / 哔哩哔哩原生评论（热门 + 最新，滚动加载更多、只读）；**内联表情、配图与大图预览、被引用楼层、楼中楼预览** |
@@ -179,10 +180,10 @@ MediaStore/SAF 流程，桌面端直接读写文件系统，改为「分析 → 
 | 来源 | 说明 |
 | --- | --- |
 | 自动 | 不额外指定，按老规矩走 |
-| 网易云 | 用「标题 + 歌手」搜索匹配，可取到翻译与音译（`romalrc`） |
-| 酷狗 | 按时长挑最接近的候选，取 LRC（含翻译） |
+| 网易云 | 用「标题 + 歌手」搜索匹配，可取到翻译、音译（`romalrc`）与**逐字时间轴 `yrc`**（新版接口，走 eapi 加密，旧接口自动回退） |
+| 酷狗 | 按时长挑最接近的候选，优先取 **KRC 逐字**（解码后按 yrc 解析），没有 KRC 才退回 LRC（含翻译） |
 | LRCLIB | 开放的歌词库，只取**带时间轴**的版本（纯文本歌词在逐行高亮里没法用） |
-| AMLL TTML DB | 社区逐字歌词库，取到行级时间轴；按标题搜索并用歌手 / 网易云 ID 交叉确认 |
+| AMLL TTML DB | 社区逐字歌词库，取 TTML 的 `<span begin end>` 逐字时间轴与 `ttm:role` 翻译 / 音译；按标题搜索并用歌手 / 网易云 ID 交叉确认 |
 
 两个细节：
 
@@ -195,6 +196,40 @@ MediaStore/SAF 流程，桌面端直接读写文件系统，改为「分析 → 
 播放页歌词界面右上角的 **「译 / 音 / 原」** 按钮在「翻译 → 音译 → 原文」之间循环；
 **翻译与音译互斥**，同一时刻只显示第二行中的一种 —— 两行都堆在原文下面会把行距撑得很开。
 歌词没有音译时会自动回落到翻译。
+
+### 逐字歌词（卡拉OK）
+
+歌词带逐字时间轴时，当前行会像卡拉OK一样**从左到右扫光**，而不是整行整体变色
+（设置 → 歌词与显示 → 「逐字歌词（卡拉OK）」，默认开启）。扫光同样出现在封面页歌词和悬浮歌词里。
+
+Windows 实机（当前行「时而孩子模样」：「时而」已唱、主色；「孩子模样」未唱、压暗）：
+
+![Windows 逐字歌词](docs/screenshots/word-lyrics.png)
+
+放大后的分界线（一个字的左右两半颜色不同，说明是连续扫光而不是整词跳变）：
+
+![逐字歌词分界](docs/screenshots/word-lyrics-zoom.png)
+
+| 来源 | 逐字格式 | 说明 |
+| --- | --- | --- |
+| 网易云 | `yrc` | `[行开始,行时长](字开始,字时长,0)字…`；新版接口才有，老歌可能只有行级 LRC |
+| AMLL TTML DB | TTML | 每个 `<span begin end>` 是一个字/音节；`ttm:role` 的翻译、音译单独成行 |
+| 酷狗 | KRC | Base64 + 4 字节头 + XOR + zlib，解码后转成 yrc 再解析 |
+| 本地 `.lrc` | 增强型 LRC | `[00:12.34]<00:12.34>逐<00:12.80>字`；没有行内时间戳就还是行级 |
+| LRCLIB | — | 只提供行级时间轴，落回整行高亮 |
+
+实现上有两点值得说明：
+
+- **进度按字符数加权**：一行里每个片段按自己的时长线性推进，扫光位置 = 已完成字符数 / 总字符数，
+  所以日文、英文「一个词多个字母」也能平滑扫过去，而不是整词跳变；
+- **不动画 200ms 一跳**：解码器的位置是每 200 ms 一个快照，界面在两次快照之间按墙钟插值
+  （最多补 260 ms，快照一到就重新对齐），并以 30 fps 刷新扫光；
+- **静止时不重绘**：只有「进度真的变了」才写状态，两句之间、间奏、暂停时完全不产生绘制。
+  这一点在软件渲染的机器上差别很大 —— 实测一首歌的播放期间，逐字歌词的额外 CPU 占用
+  从约 0.6 核降到约 0.2 核（2 核虚拟机、1437×795 窗口）。
+
+逐字歌词的原始内容（yrc / TTML）不会被写进 `.lrc` 或音频标签：下载与「批量整理」写入的仍然是
+普通 LRC（`raw` 字段），逐字时间轴只在内存里用于渲染。
 
 ### 查看评论
 
@@ -407,8 +442,8 @@ Windows 把「漫游配置」和「本机数据」分成两棵树，本应用同
 ```powershell
 gradlew run                    # 直接运行
 gradlew createDistributable    # 免安装应用目录：build\compose\binaries\main\app\NeriPlayer\
-gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.11.1.msi
-gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.11.1.exe
+gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.12.0.msi
+gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.12.0.exe
 ```
 
 - `gradlew` 是批处理包装脚本，在 CMD / PowerShell 里直接写 `gradlew`（或 `.\gradlew.bat`）；

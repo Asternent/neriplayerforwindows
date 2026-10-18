@@ -222,6 +222,11 @@ fun FloatingLyricsWindow(
     }
     val alignment = settings.alignment()
     val isPlaying = playbackState == PlaybackState.PLAYING
+    val karaokePosition = rememberSmoothLyricPosition(
+        positionMs = { positionState.value },
+        playing = isPlaying && settings.wordByWordLyrics && currentLine?.hasWordTiming == true,
+    )
+    val currentKaraoke = if (settings.wordByWordLyrics) currentLine?.karaokeSpec(karaokePosition) else null
 
     Window(
         state = windowState,
@@ -363,6 +368,7 @@ fun FloatingLyricsWindow(
                     bold = true,
                     animateReveal = settings.floatingLyricsRevealAnimation,
                     wrap = wrapLongLine,
+                    karaoke = currentKaraoke,
                 )
                 if (settings.floatingLyricsShowTranslation && !translationText.isNullOrBlank()) {
                     Spacer(Modifier.size(2.dp))
@@ -436,6 +442,8 @@ internal fun FloatingLyricLine(
     bold: Boolean,
     animateReveal: Boolean,
     wrap: Boolean = false,
+    /** 传入后当前行做逐字扫光；为 null 时是普通的静态文字。 */
+    karaoke: KaraokeSpec? = null,
 ) {
     val reveal = remember { Animatable(if (animateReveal) 0f else 1f) }
     LaunchedEffect(text, animateReveal) {
@@ -454,15 +462,19 @@ internal fun FloatingLyricLine(
         fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
         textAlign = align,
     )
-    val lineModifier = if (wrap) {
+    val karaokeActive = karaoke != null && karaoke.words.isNotEmpty()
+    // 逐字扫光需要整行一起排版，不能用 marquee（那是整块平移，扫光就对不上了）
+    val lineModifier = if (wrap || karaokeActive) {
         Modifier.fillMaxWidth()
     } else {
         Modifier
             .fillMaxWidth()
             .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1500)
     }
-    val overflow = if (wrap) TextOverflow.Ellipsis else TextOverflow.Visible
-    val maxLines = if (wrap) 3 else 1
+    val overflow = if (wrap || karaokeActive) TextOverflow.Ellipsis else TextOverflow.Visible
+    val maxLines = if (wrap && !karaokeActive) 3 else 1
+    // 没唱到的部分压暗，扫过的地方才是正常亮度；静态文字保持原样
+    val inactiveColor = if (karaokeActive) textColor.copy(alpha = effectiveAlpha * 0.45f) else textColor
 
     Box(
         modifier = lineModifier,
@@ -474,19 +486,21 @@ internal fun FloatingLyricLine(
     ) {
         when (settings.renderStyle()) {
             FloatingLyricRenderStyle.SHADOW -> {
-                Text(
+                KaraokeLyricText(
                     text = text,
-                    maxLines = maxLines,
-                    softWrap = wrap,
-                    overflow = overflow,
                     style = baseStyle.copy(
-                        color = textColor,
+                        color = inactiveColor,
                         shadow = Shadow(
                             color = settings.shadowColor().copy(alpha = effectiveAlpha * 0.9f),
                             offset = Offset(0f, 1.5f),
                             blurRadius = settings.floatingLyricsShadowBlur,
                         ),
                     ),
+                    activeColor = textColor,
+                    karaoke = karaoke,
+                    maxLines = maxLines,
+                    overflow = overflow,
+                    softWrap = wrap || karaokeActive,
                 )
             }
 
@@ -494,19 +508,21 @@ internal fun FloatingLyricLine(
                 Text(
                     text = text,
                     maxLines = maxLines,
-                    softWrap = wrap,
+                    softWrap = wrap || karaokeActive,
                     overflow = overflow,
                     style = baseStyle.copy(
                         color = settings.outlineColor().copy(alpha = effectiveAlpha),
                         drawStyle = Stroke(width = settings.floatingLyricsOutlineWidth),
                     ),
                 )
-                Text(
+                KaraokeLyricText(
                     text = text,
+                    style = baseStyle.copy(color = inactiveColor),
+                    activeColor = textColor,
+                    karaoke = karaoke,
                     maxLines = maxLines,
-                    softWrap = wrap,
                     overflow = overflow,
-                    style = baseStyle.copy(color = textColor),
+                    softWrap = wrap || karaokeActive,
                 )
             }
         }

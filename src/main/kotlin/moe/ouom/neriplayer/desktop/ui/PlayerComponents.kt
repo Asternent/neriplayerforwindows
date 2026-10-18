@@ -66,6 +66,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -283,6 +284,11 @@ fun LyricsPane(
     secondaryLine: LyricsSecondaryLineMode,
     onSeekLine: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    /** 当前播放位置；只在绘制阶段读取，避免每 200ms 重组整段歌词。 */
+    positionMs: () -> Long = { 0L },
+    playing: Boolean = false,
+    /** 打开「逐字歌词」且这份歌词确实带逐字时间轴时，当前行做卡拉OK扫光。 */
+    wordByWord: Boolean = false,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(currentIndex, lines.size) {
@@ -290,6 +296,8 @@ fun LyricsPane(
             listState.animateScrollToItem(index = (currentIndex - 2).coerceAtLeast(0))
         }
     }
+    val hasWordTiming = remember(lines) { lines.any { it.hasWordTiming } }
+    val karaokePosition = rememberSmoothLyricPosition(positionMs, playing && wordByWord && hasWordTiming)
     Box(modifier.fillMaxSize()) {
         when {
             loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -318,17 +326,24 @@ fun LyricsPane(
                             .clickable { onSeekLine(line.timeMs) }
                             .padding(vertical = 2.dp),
                     ) {
-                        Text(
+                        val karaoke = if (active && wordByWord) line.karaokeSpec(karaokePosition) else null
+                        // 有逐字时底色压暗、由扫光上色；没有逐字时保持原来的「当前行用主色」
+                        val lineColor = if (active && karaoke == null) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                        KaraokeLyricText(
                             text = line.text.ifBlank { "♪" },
-                            fontSize = (20f * fontScale).sp,
-                            lineHeight = (28f * fontScale).sp,
-                            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                            color = if (active) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            textAlign = TextAlign.Start,
+                            style = TextStyle(
+                                fontSize = (20f * fontScale).sp,
+                                lineHeight = (28f * fontScale).sp,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                                color = lineColor,
+                                textAlign = TextAlign.Start,
+                            ),
+                            activeColor = MaterialTheme.colorScheme.primary,
+                            karaoke = karaoke,
                         )
                         val secondary = secondaryLyricText(line, secondaryLine)
                         if (secondary != null) {

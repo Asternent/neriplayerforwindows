@@ -1,10 +1,13 @@
 package moe.ouom.neriplayer.desktop.net
 
+import moe.ouom.neriplayer.desktop.core.LyricFormat
 import moe.ouom.neriplayer.desktop.core.MediaSource
 import moe.ouom.neriplayer.desktop.core.OnlineArtist
 import moe.ouom.neriplayer.desktop.core.OnlineCollection
 import moe.ouom.neriplayer.desktop.core.Song
+import moe.ouom.neriplayer.desktop.core.YrcParser
 import moe.ouom.neriplayer.desktop.core.biliSongKey
+import moe.ouom.neriplayer.desktop.core.lyricsToLrc
 import moe.ouom.neriplayer.desktop.core.neteaseSongKey
 import java.security.MessageDigest
 
@@ -99,9 +102,15 @@ class NeteaseApi(private val http: HttpService) {
         }
     }
 
+    /** 按 id 取单曲详情（自动化脚本 / 直链播放用）。 */
+    fun songDetail(id: String): Song? {
+        val root = getJson("/api/song/detail?ids=%5B$id%5D") ?: return null
+        val item = root.array("songs")?.objects()?.firstOrNull() ?: return null
+        return songFromJson(JsonObjectSelf(item))
+    }
+
     /** 批量补齐歌曲封面。 */
-    private fun songCovers(ids: List<Long>): Map<Long, String> {
-        if (ids.isEmpty()) return emptyMap()
+    private fun songCovers(ids: List<Long>): Map<Long, String> {        if (ids.isEmpty()) return emptyMap()
         val root = getJson("/api/song/detail?ids=%5B${ids.joinToString(",")}%5D") ?: return emptyMap()
         val list = root.array("songs") ?: return emptyMap()
         return list.objects().mapNotNull { item ->
@@ -189,10 +198,34 @@ class NeteaseApi(private val http: HttpService) {
     }
 
     /**
-     * 歌词：`rv=1` 让接口额外返回 `romalrc`（罗马音/音译），`tv=-1` 返回 `tlyric`（翻译）。
-     * 两者都可能缺席，缺席时对应字段为 null。
+     * 歌词。
+     *
+     * 优先走新版 eapi 接口 `/eapi/song/lyric/v1`：它比旧接口多返回 `yrc`（逐字时间轴）
+     * 与 `ytlrc` / `yromalrc`（逐字翻译 / 音译）。取不到时退回旧的公开接口，
+     * 至少还有行级 LRC，不会因为接口变更就没歌词。
      */
     fun lyric(id: String): LyricQueryResult? {
+        eapiLyric(id)?.let { payload ->
+            val lrc = payload.obj("lrc")?.str("lyric")?.takeIf { it.isNotBlank() }
+            val yrc = payload.obj("yrc")?.str("lyric")?.takeIf { it.isNotBlank() }
+            if (lrc != null || yrc != null) {
+                val raw = lrc?.let(::normalizeNeteaseLyricText)
+                    ?: yrc?.let { lyricsToLrc(YrcParser.parse(it)) }
+                if (!raw.isNullOrBlank()) {
+                    return LyricQueryResult(
+                        raw = raw,
+                        translated = payload.obj("ytlrc")?.str("lyric")?.takeIf { it.isNotBlank() }
+                            ?: payload.obj("tlyric")?.str("lyric")?.takeIf { it.isNotBlank() },
+                        romanized = payload.obj("yromalrc")?.str("lyric")?.takeIf { it.isNotBlank() }
+                            ?: payload.obj("romalrc")?.str("lyric")?.takeIf { it.isNotBlank() },
+                        source = MediaSource.NETEASE.displayName,
+                        wordRaw = yrc,
+                        wordFormat = LyricFormat.YRC,
+                    )
+                }
+            }
+        }
+
         val root = getJson("/api/song/lyric?id=$id&lv=1&kv=1&tv=-1&rv=1") ?: return null
         val lyric = root.obj("lrc")?.str("lyric") ?: return null
         if (lyric.isBlank()) return null
@@ -204,6 +237,54 @@ class NeteaseApi(private val http: HttpService) {
             romanized = romanized?.takeIf { it.isNotBlank() },
             source = MediaSource.NETEASE.displayName,
         )
+    }
+
+    /** 新版接口的歌词参数（eapi 加密后作为 `params` 表单提交）。 */
+    private fun eapiLyric(id: String): JsonObjectSelf? {
+        val path = "/api/song/lyric/v1"
+        val json = """{"id":"$id","cp":false,"lv":0,"kv":0,"tv":0,"rv":0,"yv":0,"ytv":0,"yrv":0}"""
+        val params = NeteaseCrypto.eapiParams(path, json)
+        val text = http.postForm(
+            "https://interface.music.163.com/eapi/song/lyric/v1",
+            mapOf("params" to params),
+            headers = mapOf(
+                "Referer" to "https://music.163.com/",
+                "Origin" to "https://music.163.com",
+                "Cookie" to "os=pc; appver=9.0.50; channel=netease; deviceId=NeriPlayer",
+            ),
+            timeoutSeconds = 20,
+        ) ?: return null
+        return NeriJsonParser.parse(text).asObject()?.let { JsonObjectSelf(it) }
+    }
+
+    /**
+     * 新版接口把「作词: 周杰伦」这类制作信息写成了 JSON 行：
+     * `{"t":0,"c":[{"tx":"作词: "},{"tx":"周杰伦"}]}`。
+     * 转回普通 LRC 行，否则这些信息会被 LrcParser 当噪声丢掉。
+     */
+    private fun normalizeNeteaseLyricText(raw: String): String {
+        if (raw.lineSequence().none { it.trimStart().startsWith("{") }) return raw
+        return raw.lineSequence().mapNotNull { line ->
+            val trimmed = line.trim()
+            if (trimmed.isEmpty()) return@mapNotNull null
+            if (!trimmed.startsWith("{")) return@mapNotNull line
+            val obj = NeriJsonParser.parse(trimmed).asObject() ?: return@mapNotNull null
+            val time = obj.long("t") ?: 0L
+            val text = obj.array("c")?.objects()
+                ?.joinToString("") { it.str("tx").orEmpty() }
+                ?.trim()
+                .orEmpty()
+            if (text.isEmpty()) {
+                null
+            } else {
+                "[%02d:%02d.%03d]%s".format(
+                    time / 60_000L,
+                    time / 1_000L % 60L,
+                    time % 1_000L,
+                    text,
+                )
+            }
+        }.joinToString("\n")
     }
 
     /**

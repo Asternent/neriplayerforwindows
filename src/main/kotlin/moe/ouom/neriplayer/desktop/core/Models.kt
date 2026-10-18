@@ -100,13 +100,38 @@ data class AlbumGroup(
     val songs: List<Song>,
 )
 
+/**
+ * 逐字歌词里的一段（一个字 / 一个词 / 一个音节）。
+ *
+ * 只有带逐字时间轴的来源（网易云 yrc、AMLL TTML、增强型 LRC、酷狗 KRC）才会有这个，
+ * 普通 LRC 只能给到行级时间。
+ */
+data class LyricWord(
+    val text: String,
+    val startMs: Long,
+    val endMs: Long,
+)
+
 data class LyricLine(
     val timeMs: Long,
     val text: String,
     val translation: String? = null,
     /** 音译（罗马音），来自网易云的 romalrc 或第三方歌词源。 */
     val romanization: String? = null,
-)
+    /** 逐字时间轴；为空表示这行只有行级时间（高亮按整行线性推进）。 */
+    val words: List<LyricWord> = emptyList(),
+    /** 行结束时间；0 表示未知，由逐字时间轴或下一行推导。 */
+    val endMs: Long = 0L,
+) {
+    val hasWordTiming: Boolean get() = words.isNotEmpty()
+
+    /** 这一行真正唱完的时间（逐字优先）。 */
+    val effectiveEndMs: Long get() = when {
+        words.isNotEmpty() -> words.last().endMs.coerceAtLeast(timeMs)
+        endMs > timeMs -> endMs
+        else -> timeMs
+    }
+}
 
 data class Lyrics(
     val raw: String = "",
@@ -119,6 +144,9 @@ data class Lyrics(
 
     /** 这份歌词是否带音译，用于决定界面上要不要给「音译」按钮。 */
     val hasRomanization: Boolean get() = lines.any { !it.romanization.isNullOrBlank() }
+
+    /** 这份歌词是否带逐字时间轴（决定要不要做卡拉OK扫光）。 */
+    val hasWordTiming: Boolean get() = lines.any { it.hasWordTiming }
 }
 
 /** 在线歌单 / 专辑 摘要。 */

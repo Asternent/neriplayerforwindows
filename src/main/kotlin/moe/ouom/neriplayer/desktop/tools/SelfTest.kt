@@ -9,8 +9,8 @@ import moe.ouom.neriplayer.desktop.core.MediaSource
 import moe.ouom.neriplayer.desktop.core.Song
 import moe.ouom.neriplayer.desktop.core.createAudioEngine
 import moe.ouom.neriplayer.desktop.core.displayName
+import moe.ouom.neriplayer.desktop.core.progressAt
 import moe.ouom.neriplayer.desktop.net.OnlineRepository
-import moe.ouom.neriplayer.desktop.net.AmllProvider
 import moe.ouom.neriplayer.desktop.net.LyricSource
 import moe.ouom.neriplayer.desktop.net.asObject
 import moe.ouom.neriplayer.desktop.net.formatCommentTime
@@ -256,15 +256,22 @@ private suspend fun checkLyricSources(online: OnlineRepository) {
     check("lrc-merge-romanization", merged[0].romanization == "yi" && merged[1].romanization == "er")
     check("lrc-merge-no-cross-talk", merged[1].translation == null && merged[0].romanization != merged[0].translation)
 
-    // ---------------------------------------------------------- AMLL TTML → LRC
+    // ---------------------------------------------------------- AMLL TTML → LRC / 逐字
     val ttml = "<tt><body><div>" +
         "<p begin=\"00:01.737\" end=\"00:06.722\"><span begin=\"00:01.737\">沈</span><span>む</span></p>" +
         "<p begin=\"01:02.189\" end=\"01:04.033\"><span>鳴る</span><span>&amp;夜</span></p>" +
         "<p begin=\"00:10.000\"><span>本&#39;文</span>" +
         "<span ttm:role=\"x-translation\">translated &#x2019;line</span></p>" +
+        "<p begin=\"00:20.000\" end=\"00:24.000\">" +
+        "<span begin=\"00:20.000\" end=\"00:20.400\">逐</span>" +
+        "<span begin=\"00:20.400\" end=\"00:21.200\">字</span>" +
+        "<span begin=\"00:21.200\" end=\"00:22.000\">歌</span>" +
+        "<span begin=\"00:22.000\" end=\"00:24.000\">詞</span>" +
+        "<span ttm:role=\"x-translation\">逐字翻译</span></p>" +
         "</div></body></tt>"
-    val ttmlLines = lrc.parse(AmllProvider.parseTtml(ttml))
-    check("amll-ttml-line-count", ttmlLines.size == 4, "${ttmlLines.map { it.timeMs }}")
+    val ttmlParsed = moe.ouom.neriplayer.desktop.core.TtmlParser.parse(ttml)
+    val ttmlLines = lrc.parse(moe.ouom.neriplayer.desktop.core.TtmlParser.toLrc(ttmlParsed))
+    check("amll-ttml-line-count", ttmlLines.size == 6, "${ttmlLines.map { it.timeMs }}")
     check("amll-ttml-text", ttmlLines.firstOrNull { it.timeMs == 1_737L }?.text == "沈む",
         "${ttmlLines.firstOrNull { it.timeMs == 1_737L }?.text}")
     val ttmlAt62 = ttmlLines.firstOrNull { it.timeMs == 62_189L }
@@ -277,6 +284,154 @@ private suspend fun checkLyricSources(online: OnlineRepository) {
         ttmlAt10 == listOf("本'文", "translated ’line"),
         "$ttmlAt10",
     )
+    // 逐字：每个 <span> 的 begin/end 都要变成 LyricWord
+    val ttmlWordLine = ttmlParsed.lines.firstOrNull { it.timeMs == 20_000L }
+    check(
+        "amll-ttml-words",
+        ttmlWordLine?.words?.map { it.text } == listOf("逐", "字", "歌", "詞"),
+        "${ttmlWordLine?.words?.map { it.text }}",
+    )
+    check(
+        "amll-ttml-word-timing",
+        ttmlWordLine?.words?.map { it.startMs to it.endMs } ==
+            listOf(20_000L to 20_400L, 20_400L to 21_200L, 21_200L to 22_000L, 22_000L to 24_000L),
+        "${ttmlWordLine?.words?.map { it.startMs to it.endMs }}",
+    )
+    check("amll-ttml-word-text", ttmlWordLine?.text == "逐字歌詞", "${ttmlWordLine?.text}")
+    check("amll-ttml-word-translation", ttmlWordLine?.translation == "逐字翻译", "${ttmlWordLine?.translation}")
+    check(
+        "amll-ttml-word-progress",
+        ttmlWordLine != null &&
+            kotlin.math.abs(ttmlWordLine.progressAt(20_200L) - 0.125f) < 0.01f &&
+            kotlin.math.abs(ttmlWordLine.progressAt(21_200L) - 0.5f) < 0.01f &&
+            ttmlWordLine.progressAt(24_000L) == 1f,
+        "${ttmlWordLine?.progressAt(20_200L)} / ${ttmlWordLine?.progressAt(21_200L)}",
+    )
+    check(
+        "amll-ttml-word-offset",
+        moe.ouom.neriplayer.desktop.core.TtmlParser.parse(ttml, extraOffsetMs = 500L)
+            .lines.firstOrNull { it.timeMs == 19_500L }?.words?.isNotEmpty() == true,
+    )
+
+    // ---------------------------------------------------------- 网易云 yrc 逐字
+    val yrcSample = """
+        {"t":0,"c":[{"tx":"作词: "},{"tx":"某某"}]}
+        [1000,2000](1000,500,0)逐(1500,500,0)字(2000,1000,0)歌詞
+        [4000,1000](4000,1000,0)第二句
+    """.trimIndent()
+    val yrcLines = moe.ouom.neriplayer.desktop.core.YrcParser.parse(yrcSample)
+    check("yrc-line-count", yrcLines.size == 2, "${yrcLines.map { it.timeMs }}")
+    check("yrc-word-text", yrcLines[0].text == "逐字歌詞", "${yrcLines[0].text}")
+    check(
+        "yrc-word-timing",
+        yrcLines[0].words.map { it.text to (it.startMs to it.endMs) } ==
+            listOf("逐" to (1000L to 1500L), "字" to (1500L to 2000L), "歌詞" to (2000L to 3000L)),
+        "${yrcLines[0].words.map { it.text to (it.startMs to it.endMs) }}",
+    )
+    check("yrc-line-end", yrcLines[0].endMs == 3000L, "${yrcLines[0].endMs}")
+    check("yrc-json-credit-skipped", yrcLines.none { it.text.contains("作词") })
+    check(
+        "yrc-offset",
+        moe.ouom.neriplayer.desktop.core.YrcParser.parse(yrcSample, extraOffsetMs = 500L)
+            .first().timeMs == 500L,
+    )
+    check(
+        "lyric-format-detect",
+        moe.ouom.neriplayer.desktop.core.detectLyricFormat(yrcSample) ==
+            moe.ouom.neriplayer.desktop.core.LyricFormat.YRC &&
+            moe.ouom.neriplayer.desktop.core.detectLyricFormat(ttml) ==
+            moe.ouom.neriplayer.desktop.core.LyricFormat.TTML &&
+            moe.ouom.neriplayer.desktop.core.detectLyricFormat(raw) ==
+            moe.ouom.neriplayer.desktop.core.LyricFormat.LRC,
+    )
+
+    // ---------------------------------------------------------- 增强型 LRC 逐字
+    val enhancedRaw = "[00:10.00]<00:10.00>逐<00:10.50>字<00:11.20>歌詞\n[00:13.00]下一句\n"
+    val enhancedLines = lrc.parse(enhancedRaw)
+    check("enhanced-lrc-count", enhancedLines.size == 2, "${enhancedLines.map { it.timeMs }}")
+    check("enhanced-lrc-text", enhancedLines[0].text == "逐字歌詞", "${enhancedLines[0].text}")
+    check(
+        "enhanced-lrc-words",
+        enhancedLines[0].words.map { it.text to it.startMs } ==
+            listOf("逐" to 10_000L, "字" to 10_500L, "歌詞" to 11_200L),
+        "${enhancedLines[0].words.map { it.text to it.startMs }}",
+    )
+    // 最后一个词的结束时间要由下一行补出来，否则扫光会在行尾卡住
+    check("enhanced-lrc-last-end", enhancedLines[0].words.last().endMs == 13_000L,
+        "${enhancedLines[0].words.last().endMs}")
+    check(
+        "enhanced-lrc-merge-keeps-words",
+        lrc.merge(enhancedLines, lrc.parse("[00:10.00]翻译\n")).first().let {
+            it.words.size == 3 && it.translation == "翻译"
+        },
+    )
+    check(
+        "enhanced-lrc-split-keeps-words",
+        lrc.splitDuplicatedTimestamps(enhancedRaw).first.first().words.size == 3,
+    )
+
+    // ---------------------------------------------------------- 逐字进度（卡拉OK 扫光）
+    val wordLine = moe.ouom.neriplayer.desktop.core.LyricLine(
+        timeMs = 1_000L,
+        text = "逐字",
+        words = listOf(
+            moe.ouom.neriplayer.desktop.core.LyricWord("逐", 1_000L, 2_000L),
+            moe.ouom.neriplayer.desktop.core.LyricWord("字", 2_000L, 3_000L),
+        ),
+    )
+    check("word-progress-before", wordLine.progressAt(500L) == 0f)
+    check(
+        "word-progress-mid",
+        kotlin.math.abs(wordLine.progressAt(1_500L) - 0.25f) < 0.01f,
+        "${wordLine.progressAt(1_500L)}",
+    )
+    check(
+        "word-progress-second-char",
+        kotlin.math.abs(wordLine.progressAt(2_000L) - 0.5f) < 0.01f,
+        "${wordLine.progressAt(2_000L)}",
+    )
+    check("word-progress-done", wordLine.progressAt(3_000L) == 1f)
+    check(
+        "word-progress-line-fallback",
+        kotlin.math.abs(
+            moe.ouom.neriplayer.desktop.core.LyricLine(1_000L, "ab", endMs = 3_000L).progressAt(2_000L) - 0.5f,
+        ) < 0.01f,
+    )
+    check(
+        "lyrics-has-word-timing",
+        moe.ouom.neriplayer.desktop.core.Lyrics(lines = listOf(wordLine)).hasWordTiming &&
+            !moe.ouom.neriplayer.desktop.core.Lyrics(lines = listOf(moe.ouom.neriplayer.desktop.core.LyricLine(1_000L, "x"))).hasWordTiming,
+    )
+
+    // ---------------------------------------------------------- 酷狗 KRC 解码
+    run {
+        val plainKrc = "[1000,2000]<0,500,0>逐<500,500,0>字<1000,1000,0>歌詞\n"
+        val deflated = java.io.ByteArrayOutputStream().also { out ->
+            java.util.zip.DeflaterOutputStream(out).use { it.write(plainKrc.toByteArray()) }
+        }.toByteArray()
+        val key = byteArrayOf(
+            0x40, 0x47, 0x61, 0x77, 0x5e, 0x32, 0x74, 0x47,
+            0x51, 0x36, 0x31, 0x2d, 0xce.toByte(), 0xd2.toByte(), 0x6e, 0x69,
+        )
+        val encrypted = ByteArray(4 + deflated.size)
+        deflated.forEachIndexed { index, byte ->
+            encrypted[4 + index] = (byte.toInt() xor key[index % key.size].toInt()).toByte()
+        }
+        val decoded = moe.ouom.neriplayer.desktop.net.KugouKrc.decode(
+            java.util.Base64.getEncoder().encodeToString(encrypted),
+        )
+        check(
+            "kugou-krc-decode",
+            decoded != null && decoded.yrc.contains("(1000,500,0)逐"),
+            "${decoded?.yrc}",
+        )
+        check(
+            "kugou-krc-lrc",
+            decoded != null &&
+                moe.ouom.neriplayer.desktop.core.YrcParser.parse(decoded.yrc).firstOrNull()?.words?.size == 3,
+            "${decoded?.yrc}",
+        )
+    }
 
     // ---------------------------------------------------------- 歌词第二行模式
     val none = LyricsSecondaryLineMode.NONE
@@ -340,6 +495,25 @@ private suspend fun checkLyricSources(online: OnlineRepository) {
     )
     check("netease-translation-present", !neteaseLyric?.translated.isNullOrBlank())
     check("netease-romanization-present", !neteaseLyric?.romanized.isNullOrBlank())
+
+    // ---------------------------------------------------------- 在线：网易云逐字（eapi 新接口）
+    // 新版歌曲才有 yrc；选一首确定有的（孤勇者），接口真的返回了才检查解析
+    val yrcOnline = online.netease.lyric("1901371647")
+    log(
+        "netease yrc: wordRaw=${yrcOnline?.wordRaw?.length ?: 0} " +
+            "format=${yrcOnline?.wordFormat} raw=${yrcOnline?.raw?.length ?: 0}",
+    )
+    check("netease-yrc-available", !yrcOnline?.wordRaw.isNullOrBlank(), "wordRaw 为空，eapi 可能不可用")
+    val yrcOnlineLines = moe.ouom.neriplayer.desktop.core.YrcParser.parse(yrcOnline?.wordRaw.orEmpty())
+    check(
+        "netease-yrc-parse",
+        yrcOnlineLines.any { it.hasWordTiming },
+        "lines=${yrcOnlineLines.size} withWords=${yrcOnlineLines.count { it.hasWordTiming }}",
+    )
+    check(
+        "netease-yrc-line-text",
+        yrcOnlineLines.firstOrNull { it.hasWordTiming }?.let { it.text == it.words.joinToString("") { word -> word.text } } == true,
+    )
 
     // ---------------------------------------------------------- 在线：评论
     val neteaseComments = online.comments(song, 0, 20)

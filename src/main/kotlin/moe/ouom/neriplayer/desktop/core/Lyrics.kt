@@ -13,6 +13,9 @@ object LrcParser {
     private val timeTagRegex = Regex("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?]")
     private val metaRegex = Regex("^\\[([a-zA-Z#]+):(.*)]$")
 
+    /** 增强型 LRC（A2）的行内逐字时间戳：`<mm:ss.xx>` / `<mm:ss.xxx>`。 */
+    private val wordTagRegex = Regex("<(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?>")
+
     private fun fractionToMs(raw: String?): Long {
         if (raw.isNullOrBlank()) return 0L
         return when (raw.length) {
@@ -22,16 +25,25 @@ object LrcParser {
         }
     }
 
+    private fun timestampMs(match: MatchResult): Long {
+        val minutes = match.groupValues[1].toLongOrNull() ?: 0L
+        val seconds = match.groupValues[2].toLongOrNull() ?: 0L
+        return minutes * 60_000L + seconds * 1_000L + fractionToMs(match.groupValues[3])
+    }
+
     /**
      * 解析 LRC。
      *
      * [extraOffsetMs] 是用户在设置里给该歌词来源配的默认偏移，会叠加在文件自带的
      * `[offset:]` 之上；两者方向一致 —— 正值表示歌词提前出现。
+     *
+     * 带 `<mm:ss.xx>` 行内时间戳的增强型 LRC 会被解析出 [LyricLine.words]，
+     * 这样「逐字歌词」对本地 .lrc 也生效；没有行内标签的行仍然是行级时间。
      */
     fun parse(raw: String, extraOffsetMs: Long = 0L): List<LyricLine> {
         if (raw.isBlank()) return emptyList()
         var offset = 0L
-        val collected = ArrayList<Pair<Long, String>>()
+        val collected = ArrayList<LyricLine>()
         raw.lineSequence().forEach { line ->
             val trimmed = line.trim()
             if (trimmed.isEmpty()) return@forEach
@@ -43,18 +55,68 @@ object LrcParser {
             }
             val matches = timeTagRegex.findAll(trimmed).toList()
             if (matches.isEmpty()) return@forEach
-            val text = trimmed.substring(matches.last().range.last + 1).trim()
-            matches.forEach { match ->
-                val minutes = match.groupValues[1].toLongOrNull() ?: 0L
-                val seconds = match.groupValues[2].toLongOrNull() ?: 0L
-                val ms = minutes * 60_000L + seconds * 1_000L + fractionToMs(match.groupValues[3])
-                collected += ms to text
+            val content = trimmed.substring(matches.last().range.last + 1)
+            val shift = offset + extraOffsetMs
+            val wordMatches = wordTagRegex.findAll(content).toList()
+            if (wordMatches.isEmpty()) {
+                val text = content.trim()
+                matches.forEach { match ->
+                    collected += LyricLine((timestampMs(match) - shift).coerceAtLeast(0L), text)
+                }
+                return@forEach
+            }
+
+            // 增强型 LRC：行首时间戳是整行开始，行内 <…> 是每个字/词的开始时间
+            val lineStart = timestampMs(matches.first())
+            val words = ArrayList<LyricWord>(wordMatches.size + 1)
+            val prefix = content.substring(0, wordMatches.first().range.first)
+            if (prefix.isNotBlank()) {
+                words += LyricWord(
+                    text = prefix.trim(),
+                    startMs = (lineStart - shift).coerceAtLeast(0L),
+                    endMs = (timestampMs(wordMatches.first()) - shift).coerceAtLeast(0L),
+                )
+            }
+            wordMatches.forEachIndexed { index, match ->
+                val textEnd = wordMatches.getOrNull(index + 1)?.range?.first ?: content.length
+                val text = content.substring(match.range.last + 1, textEnd)
+                if (text.isEmpty()) return@forEachIndexed
+                val wordStart = timestampMs(match)
+                val nextStart = wordMatches.getOrNull(index + 1)?.let { timestampMs(it) }
+                words += LyricWord(
+                    text = text,
+                    startMs = (wordStart - shift).coerceAtLeast(0L),
+                    // 最后一个词的结束时间要等下一行才知道，先留 0 交给下面的补全
+                    endMs = nextStart?.let { (it - shift).coerceAtLeast(0L) } ?: 0L,
+                )
+            }
+            val text = words.joinToString("") { it.text }
+            if (text.isNotBlank()) {
+                collected += LyricLine(
+                    timeMs = (lineStart - shift).coerceAtLeast(0L),
+                    text = text,
+                    words = words,
+                )
             }
         }
-        val shift = offset + extraOffsetMs
-        return collected
-            .sortedBy { it.first }
-            .map { (time, text) -> LyricLine((time - shift).coerceAtLeast(0L), text) }
+        val sorted = collected.sortedBy { it.timeMs }.toMutableList()
+        // 补全每行最后一个词的结束时间：优先用下一行开始，实在没有就按 3 秒兜底
+        sorted.forEachIndexed { index, line ->
+            if (line.words.isEmpty()) return@forEachIndexed
+            val nextLineStart = sorted.getOrNull(index + 1)?.timeMs
+            val words = line.words.mapIndexed { wordIndex, word ->
+                val nextWordStart = line.words.getOrNull(wordIndex + 1)?.startMs
+                val end = when {
+                    word.endMs > word.startMs -> word.endMs
+                    nextWordStart != null -> nextWordStart
+                    nextLineStart != null -> nextLineStart
+                    else -> word.startMs + 3_000L
+                }
+                word.copy(endMs = end.coerceAtLeast(word.startMs))
+            }
+            sorted[index] = line.copy(words = words, endMs = words.last().endMs)
+        }
+        return sorted
     }
 
     /**
@@ -167,15 +229,16 @@ object LrcParser {
         extraOffsetMs: Long = 0L,
     ): Pair<List<LyricLine>, List<LyricLine>> {
         val lines = parse(raw, extraOffsetMs)
-        val grouped = LinkedHashMap<Long, MutableList<String>>()
-        lines.forEach { line -> grouped.getOrPut(line.timeMs) { mutableListOf() }.add(line.text) }
+        val grouped = LinkedHashMap<Long, MutableList<LyricLine>>()
+        lines.forEach { line -> grouped.getOrPut(line.timeMs) { mutableListOf() }.add(line) }
         val main = ArrayList<LyricLine>()
         val translation = ArrayList<LyricLine>()
-        grouped.forEach { (time, texts) ->
-            val distinct = texts.filter { it.isNotBlank() }.distinct()
+        grouped.forEach { (time, group) ->
+            val distinct = group.filter { it.text.isNotBlank() }.distinctBy { it.text }
             if (distinct.isEmpty()) return@forEach
-            main += LyricLine(time, distinct.first())
-            distinct.drop(1).forEach { extra -> translation += LyricLine(time, extra) }
+            // 保留整行对象：逐字时间轴（words）就挂在这一行上，不能只留文本
+            main += distinct.first()
+            distinct.drop(1).forEach { extra -> translation += LyricLine(time, extra.text) }
         }
         return main.sortedBy { it.timeMs } to translation.sortedBy { it.timeMs }
     }
@@ -337,16 +400,36 @@ class LyricsRepository(
     }
 
     private fun fromResult(result: LyricQueryResult, offsetMs: Long): Lyrics {
+        // 逐字来源（网易云 yrc / AMLL TTML）：raw 仍然是可内嵌、可下载的 LRC，
+        // 逐字时间轴单独带在 wordRaw 里，避免把 TTML 写进标签或 .lrc 文件。
+        val wordRaw = result.wordRaw?.takeIf { it.isNotBlank() }
+        if (wordRaw != null) {
+            val parsed = when (result.wordFormat) {
+                LyricFormat.TTML -> TtmlParser.parse(wordRaw, offsetMs)
+                LyricFormat.YRC, LyricFormat.LRC -> TtmlLyrics(
+                    lines = YrcParser.parse(wordRaw, offsetMs),
+                    translated = parseSecondary(result.translated, offsetMs),
+                    romanized = parseSecondary(result.romanized, offsetMs),
+                )
+            }
+            if (parsed.lines.isNotEmpty()) {
+                return Lyrics(
+                    raw = result.raw,
+                    lines = LrcParser.merge(parsed.lines, parsed.translated, parsed.romanized),
+                    translated = parsed.translated,
+                    romanized = parsed.romanized,
+                    source = result.source,
+                )
+            }
+        }
+
         val (main, inlineTranslation) = LrcParser.splitDuplicatedTimestamps(result.raw, offsetMs)
         val translationLines = if (!result.translated.isNullOrBlank()) {
-            LrcParser.parse(result.translated, offsetMs)
+            parseSecondary(result.translated, offsetMs)
         } else {
             inlineTranslation
         }
-        val romanizedLines = result.romanized
-            ?.takeIf { it.isNotBlank() }
-            ?.let { LrcParser.parse(it, offsetMs) }
-            .orEmpty()
+        val romanizedLines = parseSecondary(result.romanized, offsetMs)
         return Lyrics(
             raw = result.raw,
             lines = LrcParser.merge(main, translationLines, romanizedLines),
@@ -354,6 +437,16 @@ class LyricsRepository(
             romanized = romanizedLines,
             source = result.source,
         )
+    }
+
+    /** 翻译 / 音译可能是 LRC，也可能是同格式的 yrc，按内容自动识别。 */
+    private fun parseSecondary(raw: String?, offsetMs: Long): List<LyricLine> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return when (detectLyricFormat(raw)) {
+            LyricFormat.YRC -> YrcParser.parse(raw, offsetMs)
+            LyricFormat.TTML -> TtmlParser.parse(raw, offsetMs).lines
+            LyricFormat.LRC -> LrcParser.parse(raw, offsetMs)
+        }
     }
 }
 
