@@ -59,6 +59,9 @@ class SystemMediaControl(
     private var session: SmtcSession? = null
 
     @Volatile
+    private var openingSession = false
+
+    @Volatile
     private var hotkeys: MediaHotkeys? = null
 
     @Volatile
@@ -111,6 +114,40 @@ class SystemMediaControl(
             println("[smtc] 系统媒体控制不可用，跳过（不影响播放）")
         }
         return running
+    }
+
+    /**
+     * 只补注册 SMTC 系统媒体浮层（不重复注册热键）。
+     *
+     * 应用启动时主窗口还不存在，`SmtcSession.open` 找不到窗口就会放弃；
+     * 等窗口真正显示出来后由 `AppContainer.onMainWindowReady` 再调一次。
+     * 内部会等 WinRT 初始化，调用方必须在后台线程执行。
+     */
+    fun ensureSession(): Boolean {
+        if (session != null) return true
+        synchronized(this) {
+            if (session != null) return true
+            if (openingSession) return false
+            openingSession = true
+        }
+        return try {
+            val opened = runCatching {
+                worker.submit(Callable { SmtcSession.open(shuffleProvider, repeatProvider) })
+                    .get(25, TimeUnit.SECONDS)
+            }.getOrElse { error ->
+                println("[smtc] 补注册系统媒体浮层失败：${error.message}")
+                null
+            }
+            if (opened != null) {
+                session = opened
+                runCatching { worker.execute { runCatching { opened.push(snapshotProvider()) } } }
+                startTimelineTicker()
+                println("[smtc] 系统媒体浮层已就绪")
+            }
+            opened != null
+        } finally {
+            openingSession = false
+        }
     }
 
     fun stop() {

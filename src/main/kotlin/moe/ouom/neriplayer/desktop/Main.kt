@@ -39,10 +39,21 @@ import moe.ouom.neriplayer.desktop.ui.platformUiScale
 import kotlinx.coroutines.delay
 
 fun main() {
+    // 启动耗时打点：桌面端最容易退化的就是「双击到能操作」的这段时间
+    val bootStartedAt = System.nanoTime()
+    fun bootLog(stage: String) {
+        val elapsed = (System.nanoTime() - bootStartedAt) / 1_000_000
+        println("[boot] $stage +${elapsed}ms")
+    }
+    bootLog("main-enter")
     setupDesktopLookAndFeel()
+    bootLog("look-and-feel")
     val container = AppContainer()
+    bootLog("container-created")
     container.bootstrap()
+    bootLog("bootstrap-done")
     application {
+        bootLog("application-loop")
         val settings by container.settings.state.collectAsState()
         var mainWindowFocused by remember { mutableStateOf(true) }
         var windowVisible by remember { mutableStateOf(true) }
@@ -85,6 +96,7 @@ fun main() {
                     }
                 } else {
                     container.player.persistQueueState()
+                    container.settings.flush()
                     exitApplication()
                 }
             },
@@ -97,6 +109,9 @@ fun main() {
             onKeyEvent = { event -> handleShortcut(event, container) },
         ) {
             LaunchedEffect(Unit) {
+                bootLog("window-content")
+                // 启动时窗口还不存在，SMTC 注册会失败；这里补一次（内部会起后台线程）
+                container.onMainWindowReady()
                 while (true) {
                     mainWindowFocused = window.isFocused
                     delay(350)
@@ -163,6 +178,7 @@ fun main() {
             }
             AppIntents.quit = {
                 container.player.persistQueueState()
+                container.settings.flush()
                 exitApplication()
             }
             AppIntents.toggleTrayPanel = {

@@ -96,7 +96,6 @@ private fun AppScaffold(container: AppContainer) {
     val settings by container.settings.state.collectAsState()
     val song by container.player.currentSong.collectAsState()
     val state by container.player.state.collectAsState()
-    val position by container.player.positionMs.collectAsState()
     val duration by container.player.durationMs.collectAsState()
     var showOnboarding by remember { mutableStateOf(!settings.onboardingAccepted) }
     var uiTestOverlay by remember { mutableStateOf<String?>(null) }
@@ -246,12 +245,14 @@ private fun AppScaffold(container: AppContainer) {
                     MiniPlayer(
                         song = song,
                         isPlaying = state == moe.ouom.neriplayer.desktop.core.PlaybackState.PLAYING,
-                        positionMs = position,
+                        // 播放进度每 200ms 变一次：传 lambda，别让整个 Scaffold（含所有页面）跟着重组
+                        positionMs = { container.player.positionMs.value },
                         durationMs = duration,
                         onToggle = { container.player.togglePlayPause() },
                         onNext = { container.player.next() },
                         onPrevious = { container.player.previous() },
                         onOpen = { navigate(Screen.NowPlaying) },
+                        marquee = settings.songTitleMarquee,
                     )
                     NeriBottomBar(
                         selected = (current as Screen.Tab).tab,

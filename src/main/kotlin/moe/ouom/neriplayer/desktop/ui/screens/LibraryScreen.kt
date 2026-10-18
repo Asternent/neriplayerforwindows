@@ -143,12 +143,24 @@ fun LibraryScreen(
         }
     }
     val artists = remember(filteredSongs) { groupArtists(filteredSongs) }
-    val albums = remember(filteredSongs) { container.library.albums().filter { group -> filteredSongs.any { it.key == group.songs.first().key } } }
+    // 专辑先按整库分组一次，再用 key 集合过滤：原来每个专辑都对整库做 any()，
+    // 曲库上千首时搜索每敲一个字符都要跑上百万次比较，还会漏掉「命中第 2 首」的专辑。
+    val allAlbums = remember(songs) { container.library.albums() }
+    val albums = remember(filteredSongs, allAlbums) {
+        if (filteredSongs.size == songs.size) {
+            allAlbums
+        } else {
+            val keys = filteredSongs.mapTo(HashSet(filteredSongs.size)) { it.key }
+            allAlbums.filter { group -> group.songs.any { it.key in keys } }
+        }
+    }
     val favorites = playlists.firstOrNull { it.system }
     val userPlaylists = playlists.filter { !it.system }
 
     LaunchedEffect(primaryTab, query, accounts) {
         if (primaryTab != LibraryPrimaryTab.NETEASE && primaryTab != LibraryPrimaryTab.BILI) return@LaunchedEffect
+        // 输入时防抖：原来每敲一个字符都发一次在线搜索，既慢又容易被平台限流
+        if (query.isNotBlank()) kotlinx.coroutines.delay(350)
         onlineLoading = true
         val keyword = query.ifBlank { "热门" }
         var neteaseUid = container.accounts.accountOf(MediaSource.NETEASE)?.userId.orEmpty()

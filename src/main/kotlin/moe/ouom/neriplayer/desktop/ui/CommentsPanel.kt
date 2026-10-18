@@ -300,6 +300,8 @@ private fun CommentRow(
             size = 34.dp,
             shape = RoundedCornerShape(17.dp),
             fallback = Icons.Outlined.Comment,
+            // 34dp 的头像按 96px 解码就够了，别占封面缓存的额度
+            maxPx = 96,
         )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
@@ -467,7 +469,7 @@ private fun CommentRichText(
     // 每段表情各自取图；列表长度由正文决定，重建时也保持同样的顺序
     val bitmaps = ArrayList<androidx.compose.ui.graphics.ImageBitmap?>(emoteSegments.size)
     for (segment in emoteSegments) {
-        bitmaps += rememberRemoteArtwork(segment.emote.url)
+        bitmaps += rememberRemoteArtwork(segment.emote.url, maxPx = 64)
     }
     val inlineContent = LinkedHashMap<String, InlineTextContent>()
     var emoteIndex = 0
@@ -553,7 +555,7 @@ private fun CommentImageGrid(
 
 @Composable
 private fun CommentThumb(image: CommentImage, modifier: Modifier = Modifier) {
-    val bitmap = rememberRemoteArtwork(image.url)
+    val bitmap = rememberRemoteArtwork(image.url, maxPx = 640)
     if (bitmap != null) {
         Image(
             bitmap = bitmap,
@@ -591,7 +593,7 @@ private fun CommentImagePreview(
                 .clickable(onClick = onDismiss),
             contentAlignment = Alignment.Center,
         ) {
-            val bitmap = rememberRemoteArtwork(images[index].url)
+            val bitmap = rememberRemoteArtwork(images[index].url, maxPx = 1600)
             if (bitmap != null) {
                 Image(
                     bitmap = bitmap,

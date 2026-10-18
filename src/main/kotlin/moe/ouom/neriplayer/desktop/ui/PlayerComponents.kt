@@ -59,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -121,13 +122,15 @@ fun NeriBottomBar(
 fun MiniPlayer(
     song: Song?,
     isPlaying: Boolean,
-    positionMs: Long,
+    /** 传 lambda 而不是值：进度每 200ms 变一次，读值会让上层整棵树重组。 */
+    positionMs: () -> Long,
     durationMs: Long,
     onToggle: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
+    marquee: Boolean = true,
 ) {
     if (song == null) return
     // 窄窗口下迷你播放器居中收拢；横屏布局下铺满内容区，形成一条完整的播放条
@@ -141,6 +144,7 @@ fun MiniPlayer(
             onNext = onNext,
             onPrevious = onPrevious,
             onOpen = onOpen,
+            marquee = marquee,
         )
     }
 }
@@ -149,12 +153,13 @@ fun MiniPlayer(
 private fun MiniPlayerCard(
     song: Song,
     isPlaying: Boolean,
-    positionMs: Long,
+    positionMs: () -> Long,
     durationMs: Long,
     onToggle: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onOpen: () -> Unit,
+    marquee: Boolean = true,
 ) {
     val widthModifier = if (isWideAppLayout) {
         Modifier.fillMaxWidth()
@@ -181,7 +186,7 @@ private fun MiniPlayerCard(
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.basicMarqueeIfLong(),
+                        modifier = Modifier.basicMarqueeIfLong(marquee),
                     )
                     Text(
                         text = song.artistText(),
@@ -189,7 +194,7 @@ private fun MiniPlayerCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.basicMarqueeIfLong(),
+                        modifier = Modifier.basicMarqueeIfLong(marquee),
                     )
                 }
                 IconButton(onClick = onPrevious, modifier = Modifier.size(36.dp)) {
@@ -207,8 +212,9 @@ private fun MiniPlayerCard(
                 }
             }
             if (durationMs > 0L) {
+                // 只有这个进度条会随播放进度重组，卡片其余部分不动
                 LinearProgressIndicator(
-                    progress = { (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) },
+                    progress = { (positionMs().toFloat() / durationMs.toFloat()).coerceIn(0f, 1f) },
                     modifier = Modifier.fillMaxWidth().height(2.dp),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -218,13 +224,15 @@ private fun MiniPlayerCard(
     }
 }
 
+/** 长标题是否滚动：跟随设置里的「滚动显示长歌曲名」，关闭时保持静止省略号。 */
 @Composable
-fun Modifier.basicMarqueeIfLong(): Modifier =
-    this.basicMarquee()
+fun Modifier.basicMarqueeIfLong(enabled: Boolean = true): Modifier =
+    if (enabled) this.basicMarquee() else this
 
 @Composable
 fun PlayerProgressBar(
-    positionMs: Long,
+    /** 传 lambda：进度条自己按需读取，不要把 200ms 一次的变化推给整页重组。 */
+    positionMs: () -> Long,
     durationMs: Long,
     enabled: Boolean,
     onSeek: (Long) -> Unit,
@@ -233,7 +241,8 @@ fun PlayerProgressBar(
     val safeDuration = durationMs.coerceAtLeast(1L)
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
-    val displayValue = if (dragging) dragValue else (positionMs.toFloat() / safeDuration).coerceIn(0f, 1f)
+    val position by remember { derivedStateOf { positionMs() } }
+    val displayValue = if (dragging) dragValue else (position.toFloat() / safeDuration).coerceIn(0f, 1f)
     Column(modifier) {
         Slider(
             value = displayValue,
@@ -249,7 +258,7 @@ fun PlayerProgressBar(
             modifier = Modifier.fillMaxWidth(),
         )
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
-            val shownPosition = if (dragging) (dragValue * safeDuration).toLong() else positionMs
+            val shownPosition = if (dragging) (dragValue * safeDuration).toLong() else position
             Text(
                 text = formatDuration(shownPosition),
                 style = MaterialTheme.typography.labelMedium,

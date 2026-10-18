@@ -50,31 +50,42 @@ object SyncDataSerializer {
         return content
     }
 
+    /**
+     * 解析同步文件。
+     *
+     * 注意：解析失败必须抛异常，**不能**返回空的 [SyncData]。
+     * 调用方把「空」当成「远端还没有数据」，于是会拿本地快照覆盖云端；
+     * 一个损坏的远端文件就会让手机上的歌单和历史全部消失。
+     */
     fun deserialize(content: ByteArray): SyncData {
         if (content.isEmpty()) return SyncData()
         // 1. 原始 ZSTD(ProtoBuf) (新版协议)
-        if (content.size >= 4 && content[0] == 0x28.toByte() && content[1] == 0xB5.toByte() && 
-            content[2] == 0x2F.toByte() && content[3] == 0xFD.toByte()) {
-            return runCatching {
-                protoBuf.decodeFromByteArray(SyncData.serializer(), zstdDecompress(content))
-            }.getOrElse { SyncData() }
+        if (content.size >= 4 && content[0] == 0x28.toByte() && content[1] == 0xB5.toByte() &&
+            content[2] == 0x2F.toByte() && content[3] == 0xFD.toByte()
+        ) {
+            return decodeOrThrow("ZSTD") { protoBuf.decodeFromByteArray(SyncData.serializer(), zstdDecompress(content)) }
         }
         // 1.5. 原始 GZIP(ProtoBuf) (旧版省流通道)
         if (content.size > 2 && content[0] == 0x1F.toByte() && content[1] == 0x8B.toByte()) {
-            return runCatching {
-                protoBuf.decodeFromByteArray(SyncData.serializer(), gunzip(content))
-            }.getOrElse { SyncData() }
+            return decodeOrThrow("GZIP") { protoBuf.decodeFromByteArray(SyncData.serializer(), gunzip(content)) }
         }
         val text = content.decodeToString().trimStart('\uFEFF', ' ', '\n', '\r', '\t')
         // 2. JSON 文本
         if (text.startsWith("{")) {
-            return json.decodeFromString(SyncData.serializer(), text)
+            return decodeOrThrow("JSON") { json.decodeFromString(SyncData.serializer(), text) }
         }
         // 3. 旧版 Base64(GZIP(ProtoBuf))
-        return runCatching {
+        return decodeOrThrow("Base64") {
             protoBuf.decodeFromByteArray(SyncData.serializer(), gunzip(Base64.getDecoder().decode(text)))
-        }.getOrElse { SyncData() }
+        }
     }
+
+    private inline fun decodeOrThrow(format: String, block: () -> SyncData): SyncData =
+        try {
+            block()
+        } catch (error: Exception) {
+            throw IllegalStateException("同步文件（$format）无法解析：${error.message}", error)
+        }
 
     fun isBinaryFileName(fileName: String): Boolean = fileName.endsWith(".bin")
 

@@ -23,6 +23,9 @@ import java.util.zip.GZIPInputStream
 const val DESKTOP_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
+/** 单张图片 / 小文件的内存下载上限（8 MB），避免异常地址把堆撑爆。 */
+private const val MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
+
 object NeriJsonParser {
     val json = Json { ignoreUnknownKeys = true; isLenient = true; explicitNulls = false }
 
@@ -79,10 +82,41 @@ class HttpService {
     private val cookieJar = ConcurrentHashMap<String, MutableMap<String, String>>()
 
     /** Cookie 按平台分组，让登录态可以在同一平台的子域之间共享。 */
-    fun jarKeyFor(host: String): String = when {
-        host.endsWith("bilibili.com") -> "bilibili"
-        host.endsWith("music.163.com") || host.endsWith("163.com") -> "netease"
-        else -> host
+    fun jarKeyFor(host: String): String {
+        val name = host.substringBefore(':').lowercase()
+        return when {
+            // 必须按「点号边界」匹配：endsWith("bilibili.com") 会把 evilbilibili.com 也算进来
+            matchesDomain(name, "bilibili.com") || matchesDomain(name, "hdslb.com") -> "bilibili"
+            matchesDomain(name, "music.163.com") || matchesDomain(name, "163.com") ||
+                matchesDomain(name, "126.net") -> "netease"
+            else -> name
+        }
+    }
+
+    private fun matchesDomain(host: String, domain: String): Boolean =
+        host == domain || host.endsWith(".$domain")
+
+    /**
+     * 写入请求头并合并 Cookie。
+     *
+     * `HttpRequest.Builder.header()` 是追加语义：如果调用方自己带了 `Cookie`，再追加一个
+     * Cookie 头就会出现两个，服务器通常只读第一个 —— 登录态会悄悄失效。
+     */
+    private fun applyHeaders(builder: HttpRequest.Builder, headers: Map<String, String>, host: String) {
+        var staticCookie: String? = null
+        headers.forEach { (key, value) ->
+            if (key.equals("Cookie", ignoreCase = true)) {
+                staticCookie = value
+            } else {
+                builder.header(key, value)
+            }
+        }
+        val jarCookie = cookieHeaderFor(host)
+        val merged = listOfNotNull(
+            staticCookie?.takeIf { it.isNotBlank() },
+            jarCookie?.takeIf { it.isNotBlank() },
+        ).joinToString("; ")
+        if (merged.isNotBlank()) builder.setHeader("Cookie", merged)
     }
 
     fun cookiesFor(host: String): Map<String, String> = cookieJar[jarKeyFor(host)].orEmpty()
@@ -150,8 +184,7 @@ class HttpService {
                 .header("User-Agent", DESKTOP_USER_AGENT)
                 .header("Accept", "*/*")
                 .header("Accept-Encoding", "gzip")
-            headers.forEach { (key, value) -> builder.header(key, value) }
-            cookieHeaderFor(host)?.let { builder.header("Cookie", it) }
+            applyHeaders(builder, headers, host)
             if (method == "POST") {
                 builder.POST(HttpRequest.BodyPublishers.ofString(body.orEmpty()))
             } else {
@@ -180,11 +213,13 @@ class HttpService {
         val builder = HttpRequest.newBuilder(URI(url))
             .timeout(Duration.ofSeconds(25))
             .header("User-Agent", DESKTOP_USER_AGENT)
-        headers.forEach { (key, value) -> builder.header(key, value) }
-        cookieHeaderFor(host)?.let { builder.header("Cookie", it) }
+        applyHeaders(builder, headers, host)
         val response = client.send(builder.GET().build(), HttpResponse.BodyHandlers.ofByteArray())
         storeCookies(host, response)
-        response.body()
+        val bytes = response.body() ?: return@runCatching null
+        // 封面/头像不该有几十 MB；异常地址直接放弃，别把内存撑爆
+        if (bytes.size > MAX_DOWNLOAD_BYTES) return@runCatching null
+        bytes
     }.getOrNull()
 
     /** 需要读取状态码 / 响应头的调用（GitHub 同步接口要用）。 */
@@ -222,8 +257,7 @@ class HttpService {
             .timeout(Duration.ofSeconds(timeoutSeconds))
             .header("User-Agent", DESKTOP_USER_AGENT)
             .header("Accept-Encoding", "gzip")
-        headers.forEach { (key, value) -> builder.header(key, value) }
-        cookieHeaderFor(host)?.let { builder.header("Cookie", it) }
+        applyHeaders(builder, headers, host)
         val publisher = if (body == null) {
             HttpRequest.BodyPublishers.noBody()
         } else {
@@ -277,10 +311,13 @@ class HttpService {
             val builder = HttpRequest.newBuilder(URI(url))
                 .timeout(Duration.ofMinutes(30))
                 .header("User-Agent", DESKTOP_USER_AGENT)
-            headers.forEach { (key, value) -> builder.header(key, value) }
-            cookieHeaderFor(host)?.let { builder.header("Cookie", it) }
+            applyHeaders(builder, headers, host)
             val response = client.send(builder.GET().build(), HttpResponse.BodyHandlers.ofInputStream())
-            if (response.statusCode() !in 200..299) return@runCatching false
+            // 非 2xx 也要把 body 关掉，否则连接会一直被占着（之前直接 return 漏掉了）
+            if (response.statusCode() !in 200..299) {
+                runCatching { response.body().close() }
+                return@runCatching false
+            }
             val total = response.headers().firstValueAsLong("Content-Length").orElse(-1L)
             target.parentFile?.mkdirs()
             var downloaded = 0L

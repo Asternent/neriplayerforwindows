@@ -34,8 +34,13 @@ object DownloadMetadataWriter {
         coverMimeType: String?,
     ): Result {
         if (!supports(file) || !file.isFile) return Result(false, false, false)
+        // jaudiotagger 是原地重写标签：直接在用户唯一的音频文件上 commit，
+        // 中途崩溃/断电就会把文件写坏。这里先复制一份改副本，校验能读回后再原子替换。
+        // 注意副本必须保留原扩展名，否则 jaudiotagger 认不出容器格式。
+        val temp = File(file.parentFile, "${file.nameWithoutExtension}.neri-tagtmp.${file.extension}")
         return runCatching {
-            val audioFile = AudioFileIO.read(file)
+            file.copyTo(temp, overwrite = true)
+            val audioFile = AudioFileIO.read(temp)
             val tag = audioFile.getTagOrCreateAndSetDefault()
             if (title.isNotBlank()) tag.setField(FieldKey.TITLE, title)
             if (artist.isNotBlank()) tag.setField(FieldKey.ARTIST, artist)
@@ -58,14 +63,36 @@ object DownloadMetadataWriter {
                 }
             }
             audioFile.commit()
+            // 读回校验：标签确实能重新解析，才敢用它替换原文件
+            val verify = AudioFileIO.read(temp)
+            require(verify.tag != null) { "写入后无法读回标签" }
+            moveIntoPlace(temp, file)
             Result(
                 propertyWritten = title.isNotBlank() || artist.isNotBlank() || album.isNotBlank(),
                 coverWritten = coverWritten,
                 lyricWritten = lyricWritten,
             )
         }.getOrElse { error ->
-            println("[download] 写入元数据失败：${file.name} → ${error.message}")
+            runCatching { temp.delete() }
+            println("[metadata] 写入元数据失败：${file.name} → ${error.message}")
             Result(false, false, false)
+        }
+    }
+
+    private fun moveIntoPlace(temp: File, target: File) {
+        try {
+            java.nio.file.Files.move(
+                temp.toPath(),
+                target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (unsupported: java.nio.file.AtomicMoveNotSupportedException) {
+            java.nio.file.Files.move(
+                temp.toPath(),
+                target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            )
         }
     }
 }

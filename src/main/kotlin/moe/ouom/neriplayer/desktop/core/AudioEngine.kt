@@ -7,6 +7,7 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.InputStream
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.TimeUnit
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
@@ -64,21 +65,18 @@ object FfmpegSupport {
     /** 解析出来的 ffmpeg 可执行文件路径（找不到时是裸名字，交给系统在 PATH 里找）。 */
     val executable: String get() = FfmpegBinaries.ffmpeg
 
-    val available: Boolean by lazy {
-        runCatching {
-            val process = ProcessBuilder(FfmpegBinaries.ffmpeg, "-version")
-                .redirectErrorStream(true)
-                .start()
-            process.inputStream.readBytes()
-            process.waitFor() == 0
-        }.getOrDefault(false)
-    }
+    /**
+     * 是否可用：只检查可执行文件在不在，**不**启动子进程。
+     * 启动一次 `ffmpeg -version` 要几百毫秒，放在启动路径上会明显拖慢首帧。
+     */
+    val available: Boolean by lazy { FfmpegBinaries.resolved }
 
+    /** 版本号：第一次真正需要展示时才跑一次 `ffmpeg -version`，并带超时。 */
     val version: String by lazy {
         runCatching {
             val process = ProcessBuilder(FfmpegBinaries.ffmpeg, "-version").redirectErrorStream(true).start()
-            val text = process.inputStream.readBytes().decodeToString().lineSequence().firstOrNull().orEmpty()
-            process.waitFor()
+            val text = process.inputStream.bufferedReader().use { it.readLine() }.orEmpty()
+            if (!process.waitFor(3, TimeUnit.SECONDS)) process.destroyForcibly()
             text
         }.getOrDefault("")
     }
@@ -93,8 +91,23 @@ object FfmpegSupport {
         }
         command += input.target
         val process = ProcessBuilder(command).redirectErrorStream(true).start()
-        val text = process.inputStream.readBytes().decodeToString().trim()
-        process.waitFor()
+        // 远端地址卡住时 readBytes() 会一直等，必须给超时并强制结束，否则播放会永远停在 PREPARING
+        val text = process.inputStream.bufferedReader().use { reader ->
+            val builder = StringBuilder()
+            val deadline = System.currentTimeMillis() + 5_000
+            while (System.currentTimeMillis() < deadline) {
+                if (reader.ready()) {
+                    val line = reader.readLine() ?: break
+                    builder.append(line)
+                } else if (!process.isAlive) {
+                    break
+                } else {
+                    Thread.sleep(10)
+                }
+            }
+            builder.toString().trim()
+        }
+        if (!process.waitFor(1, TimeUnit.SECONDS)) process.destroyForcibly()
         val seconds = text.toDoubleOrNull() ?: return@runCatching 0L
         (seconds * 1000.0).toLong()
     }.getOrDefault(0L)

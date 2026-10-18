@@ -40,23 +40,35 @@ class WebDavSyncTransport(
         return get != null && get.status in 200..299
     }
 
-    /** 读取同步文件 */
-    fun readSyncFile(useDataSaver: Boolean): RemoteSyncFile? {
+    /** 读取同步文件：只有 404（或空文件）才算「远端没有数据」，其它错误一律上报。 */
+    fun readSyncFile(useDataSaver: Boolean): RemoteSyncRead {
         val candidates = listOf(SyncDataSerializer.fileNameFor(useDataSaver)) +
             SyncDataSerializer.readFallbackFileNames(useDataSaver)
 
+        var failure: String? = null
         for (path in candidates) {
-            val response = http.execute("GET", buildUrl(path), headers = headers()) ?: continue
-            if (response.status == 200 && response.bytes.isNotEmpty()) {
-                return RemoteSyncFile(
-                    content = response.bytes,
-                    headSha = response.header("etag").orEmpty().let(::strongETag),
-                    path = path,
-                    lastModified = response.header("last-modified").orEmpty().trim(),
-                )
+            val response = http.execute("GET", buildUrl(path), headers = headers())
+            when {
+                response == null -> failure = "网络请求失败"
+                response.status == 200 && response.bytes.isNotEmpty() -> {
+                    return RemoteSyncRead.Found(
+                        RemoteSyncFile(
+                            content = response.bytes,
+                            headSha = response.header("etag").orEmpty().let(::strongETag),
+                            path = path,
+                            lastModified = response.header("last-modified").orEmpty().trim(),
+                        ),
+                    )
+                }
+
+                response.status == 404 || response.status in 200..299 -> Unit
+                response.status == 401 || response.status == 403 ->
+                    return RemoteSyncRead.Failed("认证失败（HTTP ${response.status}）")
+
+                else -> failure = "HTTP ${response.status}"
             }
         }
-        return null
+        return failure?.let { RemoteSyncRead.Failed(it) } ?: RemoteSyncRead.Missing
     }
 
     /**
@@ -95,7 +107,7 @@ class WebDavSyncTransport(
         if (response.status == 412) {
             // 412 可能只是「服务器不认弱 ETag / 时间戳粒度太粗」。重新读一次：
             // 内容没变就说明没人改过，可以无条件重写；变了才是真冲突。
-            val current = readSyncFile(useDataSaver)
+            val current = (readSyncFile(useDataSaver) as? RemoteSyncRead.Found)?.file
             if (current == null || !sameContent(current.content, content)) {
                 return SyncWriteResult.Conflict
             }
@@ -107,7 +119,7 @@ class WebDavSyncTransport(
             val newEtag = strongETag(response.header("etag").orEmpty())
             // 没有强 ETag 的服务器（坚果云）写完必须读回校验，否则并发写会静默丢数据
             if (newEtag.isBlank()) {
-                val readBack = readSyncFile(useDataSaver)
+                val readBack = (readSyncFile(useDataSaver) as? RemoteSyncRead.Found)?.file
                 if (readBack != null && !sameContent(readBack.content, content)) {
                     return SyncWriteResult.Conflict
                 }

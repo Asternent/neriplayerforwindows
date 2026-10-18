@@ -1,6 +1,11 @@
 package moe.ouom.neriplayer.desktop.core
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.KSerializer
@@ -89,9 +94,22 @@ class JsonFileStore<T>(
             file.parentFile?.mkdirs()
             val tmp = File(file.parentFile, "${file.name}.tmp")
             tmp.writeText(NeriJson.encodeToString(serializer, value))
-            // Windows 上 renameTo 不能覆盖已存在的文件，必须先删掉目标
-            if (file.exists()) file.delete()
-            tmp.renameTo(file)
+            // 先写临时文件再原子替换。Windows 上 renameTo 不能覆盖已有文件，
+            // 「先 delete 再 rename」在两步之间崩溃就会把配置整个丢掉。
+            try {
+                java.nio.file.Files.move(
+                    tmp.toPath(),
+                    file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                )
+            } catch (unsupported: java.nio.file.AtomicMoveNotSupportedException) {
+                java.nio.file.Files.move(
+                    tmp.toPath(),
+                    file.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                )
+            }
         }
     }
 }
@@ -229,10 +247,19 @@ class SettingsRepository {
     private val _state = MutableStateFlow(loadDefaults())
     val state: StateFlow<AppSettings> = _state.asStateFlow()
 
+    // 滑块每拖动一格都会 update 一次；每次都在调用线程上整份序列化写盘，
+    // 会把界面线程卡住（设置里还带着最近播放队列）。这里改成内存立即生效、落盘合并延迟。
+    private val writeLock = Any()
+    private val saveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var saveJob: Job? = null
+    private var pendingSave: AppSettings? = null
+
     private fun loadDefaults(): AppSettings {
         val loaded = store.load()
+        // 注册表查询要起一个 reg.exe 子进程：只有真的需要猜默认曲库目录时才做
+        if (loaded.musicFolders.isNotEmpty()) return loaded
         val defaultMusic = defaultMusicDirectory()
-        return if (loaded.musicFolders.isEmpty() && defaultMusic.isDirectory) {
+        return if (defaultMusic.isDirectory) {
             loaded.copy(musicFolders = listOf(defaultMusic.absolutePath))
         } else {
             loaded
@@ -242,14 +269,45 @@ class SettingsRepository {
     val current: AppSettings get() = _state.value
 
     fun update(transform: (AppSettings) -> AppSettings) {
-        val next = transform(_state.value)
-        _state.value = next
-        store.save(next)
+        synchronized(writeLock) {
+            val next = transform(_state.value)
+            _state.value = next
+            scheduleSave(next)
+        }
     }
 
     fun replace(next: AppSettings) {
-        _state.value = next
-        store.save(next)
+        synchronized(writeLock) {
+            _state.value = next
+            scheduleSave(next)
+        }
+    }
+
+    /** 立刻把未落盘的设置写下去：退出应用前必须调一次，否则最后一次改动会丢。 */
+    fun flush() {
+        val value = synchronized(writeLock) {
+            saveJob?.cancel()
+            saveJob = null
+            val latest = pendingSave ?: _state.value
+            pendingSave = null
+            latest
+        }
+        store.save(value)
+    }
+
+    private fun scheduleSave(value: AppSettings) {
+        pendingSave = value
+        if (saveJob?.isActive == true) return
+        saveJob = saveScope.launch {
+            kotlinx.coroutines.delay(400)
+            val latest = synchronized(writeLock) {
+                val queued = pendingSave
+                pendingSave = null
+                saveJob = null
+                queued
+            } ?: return@launch
+            store.save(latest)
+        }
     }
 }
 

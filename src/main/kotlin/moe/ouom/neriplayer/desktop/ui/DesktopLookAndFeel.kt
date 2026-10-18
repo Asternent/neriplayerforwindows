@@ -43,20 +43,16 @@ fun setupDesktopLookAndFeel() {
     }
 }
 
-/** 挑选一个可用的中文字体；找不到时退回逻辑字体（由 fontconfig 做字形回退）。 */
+/** 挑选一个可用的中文字体。
+ *
+ * 这里刻意不去枚举 `availableFontFamilyNames`：在 Windows 上枚举字体会加载字体缓存，
+ * 实测要 1~3 秒，而这只是为了给 Swing 对话框选个字体。直接给常见的系统字体名，
+ * 不存在时 AWT 会自动回退，代价远小于拖慢启动。
+ */
 private fun preferredUiFont(): Font {
-    val candidates = listOf(
-        "Noto Sans CJK SC",
-        "Source Han Sans SC",
-        "Microsoft YaHei",
-        "WenQuanYi Micro Hei",
-        "Sarasa Gothic SC",
-        "PingFang SC",
-        "DejaVu Sans",
-    )
-    val available = runCatching {
-        GraphicsEnvironment.getLocalGraphicsEnvironment().availableFontFamilyNames.toSet()
-    }.getOrDefault(emptySet())
-    val family = candidates.firstOrNull { it in available } ?: Font.SANS_SERIF
+    val family = when {
+        System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true) -> "Microsoft YaHei UI"
+        else -> "Noto Sans CJK SC"
+    }
     return Font(family, Font.PLAIN, 14)
 }

@@ -3,7 +3,6 @@ package moe.ouom.neriplayer.desktop.core
 import moe.ouom.neriplayer.desktop.net.LyricQueryResult
 import moe.ouom.neriplayer.desktop.net.LyricSource
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 
 /** 内存中保留的歌词上限（超出后按最近最少使用淘汰）。 */
 private const val MAX_LYRICS_CACHE = 120
@@ -243,7 +242,6 @@ class LyricsRepository(
             size > MAX_LYRICS_CACHE
     }
     private val cacheLock = Any()
-    private val missCache = ConcurrentHashMap.newKeySet<String>()
 
     fun cached(song: Song): Lyrics? = synchronized(cacheLock) { cache[song.key] }
 
@@ -253,13 +251,11 @@ class LyricsRepository(
 
     fun invalidate(song: Song) {
         synchronized(cacheLock) { cache.remove(song.key) }
-        missCache.remove(song.key)
     }
 
     /** 清掉全部缓存：改过歌词来源或偏移之后要重新取一次。 */
     fun invalidateAll() {
         synchronized(cacheLock) { cache.clear() }
-        missCache.clear()
     }
 
     suspend fun load(song: Song): Lyrics {
@@ -289,14 +285,13 @@ class LyricsRepository(
             return lyrics
         }
 
-        if (song.key !in missCache) {
-            val remote = runCatching { remoteProvider(song) }.getOrNull()
-            if (remote != null && remote.raw.isNotBlank()) {
-                val lyrics = fromResult(remote, offsetMs(LyricSource.AUTO))
-                synchronized(cacheLock) { cache[song.key] = lyrics }
-                return lyrics
-            }
-            missCache += song.key
+        // 空结果也会进 LRU 缓存（下次直接命中），所以不需要额外的「查不到」集合：
+        // 那个集合既不淘汰也不会重试，登录后/新放了 .lrc 也永远拿不到歌词。
+        val remote = runCatching { remoteProvider(song) }.getOrNull()
+        if (remote != null && remote.raw.isNotBlank()) {
+            val lyrics = fromResult(remote, offsetMs(LyricSource.AUTO))
+            synchronized(cacheLock) { cache[song.key] = lyrics }
+            return lyrics
         }
         val empty = Lyrics()
         synchronized(cacheLock) { cache[song.key] = empty }

@@ -42,11 +42,19 @@ class SyncConfigStore {
 
     val current: SyncConfig get() = _state.value
 
+    private val updateLock = Any()
+
+    /**
+     * 读-改-写必须整体串行：同步结束时的 `finish()` 与设置页保存 Token / WebDAV 密码
+     * 可能同时发生，各自读到旧值再写回，就会把刚填好的凭据覆盖回默认值。
+     */
     fun update(transform: (SyncConfig) -> SyncConfig) {
-        val next = transform(_state.value)
-        _state.value = next
-        store.save(next)
-        restrictPermissions()
+        synchronized(updateLock) {
+            val next = transform(_state.value)
+            _state.value = next
+            store.save(next)
+            restrictPermissions()
+        }
     }
 
     fun clear() {

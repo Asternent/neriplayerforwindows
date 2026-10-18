@@ -999,6 +999,43 @@ private fun checkDesktopSyncFeatures() {
             !moe.ouom.neriplayer.desktop.sync.WebDavSyncTransport.sameContent(byteArrayOf(1), byteArrayOf(2)),
     )
 
+    // 11. 损坏的远端同步文件必须抛错：返回空数据会被当成「远端没数据」而覆盖云端
+    val corruptZstd = byteArrayOf(0x28, 0xB5.toByte(), 0x2F, 0xFD.toByte(), 1, 2, 3, 4)
+    check(
+        "sync-corrupt-zstd-throws",
+        runCatching { moe.ouom.neriplayer.desktop.sync.SyncDataSerializer.deserialize(corruptZstd) }.isFailure,
+    )
+    check(
+        "sync-corrupt-json-throws",
+        runCatching {
+            moe.ouom.neriplayer.desktop.sync.SyncDataSerializer.deserialize("{broken".toByteArray())
+        }.isFailure,
+    )
+
+    // 12. 只有配图、没有文字的 B 站评论也要保留
+    val imageOnlyObject = moe.ouom.neriplayer.desktop.net.NeriJsonParser.parse(
+        """{"rpid":31,"content":{"message":"","pictures":[{"img_src":"//i0.hdslb.com/x.jpg"}]},
+            "member":{"uname":"戊"},"ctime":1700000000}""",
+    ).asObject()
+    val imageOnlyComment = imageOnlyObject?.let {
+        moe.ouom.neriplayer.desktop.net.biliCommentFromJson(moe.ouom.neriplayer.desktop.net.JsonObjectSelf(it))
+    }
+    check(
+        "comment-bili-image-only",
+        imageOnlyComment?.images?.size == 1 && imageOnlyComment.content.isEmpty(),
+        "images=${imageOnlyComment?.images?.size}",
+    )
+
+    // 13. Cookie 归属按域名边界判断，evilbilibili.com 不能拿到 B 站 Cookie
+    val httpForTest = moe.ouom.neriplayer.desktop.net.HttpService()
+    check(
+        "cookie-domain-boundary",
+        httpForTest.jarKeyFor("evilbilibili.com") == "evilbilibili.com" &&
+            httpForTest.jarKeyFor("api.bilibili.com") == "bilibili" &&
+            httpForTest.jarKeyFor("music.163.com") == "netease",
+        "${httpForTest.jarKeyFor("evilbilibili.com")} / ${httpForTest.jarKeyFor("api.bilibili.com")}",
+    )
+
     log("desktop sync checks done")
 }
 

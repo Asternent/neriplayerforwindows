@@ -96,7 +96,6 @@ fun NowPlayingScreen(
 ) {
     val song by container.player.currentSong.collectAsState()
     val state by container.player.state.collectAsState()
-    val position by container.player.positionMs.collectAsState()
     val duration by container.player.durationMs.collectAsState()
     val shuffle by container.player.shuffle.collectAsState()
     val repeatMode by container.player.repeatMode.collectAsState()
@@ -149,7 +148,12 @@ fun NowPlayingScreen(
         }
     }
 
-    val lyricIndex = remember(lyrics, position) { currentLyricIndex(lyrics.lines, position) }
+    // 只在「当前歌词行变了」时重组，而不是每 200ms 一次；播放进度由进度条自己读
+    val lyricIndex by remember(lyrics) {
+        androidx.compose.runtime.derivedStateOf {
+            currentLyricIndex(lyrics.lines, container.player.positionMs.value)
+        }
+    }
 
     // 歌词第二行（翻译 / 音译）由两个开关 + 歌词实际内容推导；翻译与音译互斥
     val hasTranslation = remember(lyrics) { hasLyricTranslation(lyrics.lines) }
@@ -211,7 +215,7 @@ fun NowPlayingScreen(
                                     container = container,
                                     showMessage = showMessage,
                                     song = song,
-                                    position = position,
+                                    positionMs = { container.player.positionMs.value },
                                     duration = duration,
                                     state = state,
                                     buffering = buffering,
@@ -251,7 +255,7 @@ fun NowPlayingScreen(
                                 container = container,
                                 showMessage = showMessage,
                                 song = song,
-                                position = position,
+                                positionMs = { container.player.positionMs.value },
                                 duration = duration,
                                 state = state,
                                 buffering = buffering,
@@ -500,7 +504,7 @@ private fun PlayerCore(
     container: AppContainer,
     showMessage: (String) -> Unit,
     song: moe.ouom.neriplayer.desktop.core.Song?,
-    position: Long,
+    positionMs: () -> Long,
     duration: Long,
     state: PlaybackState,
     buffering: Boolean,
@@ -578,7 +582,7 @@ private fun PlayerCore(
         }
         Spacer(Modifier.height(10.dp))
         PlayerProgressBar(
-            positionMs = position,
+            positionMs = positionMs,
             durationMs = duration,
             enabled = true,
             onSeek = { container.player.seekTo(it) },
@@ -694,8 +698,11 @@ private fun PlayerCore(
 @Composable
 private fun CoverLyricsLine(container: AppContainer) {
     val lyrics by container.player.lyrics.collectAsState()
-    val position by container.player.positionMs.collectAsState()
-    val index = remember(lyrics, position) { currentLyricIndex(lyrics.lines, position) }
+    val index by remember(lyrics) {
+        androidx.compose.runtime.derivedStateOf {
+            currentLyricIndex(lyrics.lines, container.player.positionMs.value)
+        }
+    }
     if (lyrics.lines.isEmpty()) return
     val line = lyrics.lines.getOrNull(index) ?: return
     Text(

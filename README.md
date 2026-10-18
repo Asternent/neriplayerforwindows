@@ -39,9 +39,9 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 
 | 文件 | 说明 |
 | --- | --- |
-| `NeriPlayer-1.7.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
-| `NeriPlayer-1.7.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.7.0.msi` |
-| `NeriPlayer-1.7.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
+| `NeriPlayer-1.8.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
+| `NeriPlayer-1.8.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.8.0.msi` |
+| `NeriPlayer-1.8.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
 
 安装完成后从开始菜单启动「NeriPlayer」。
 
@@ -133,9 +133,10 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 | 播放统计 | ✅ 日 / 周 / 月 / 年 / 总，按次数、时长、最近排序 |
 | 播放队列 / 睡眠定时器 | ✅ 队列增删排序、倒计时与播完当前停止 |
 | 主题 | ✅ 深浅色、动态取色跟随封面、9 种 Material 调色风格、2021 / 2025 色彩规范 |
-| 与手机端同步协议互通 | ✅ 同一仓库、同一文件格式（JSON 与省流二进制） |
+| 与手机端同步协议互通 | ✅ 同一仓库、同一文件格式（JSON 与省流二进制）；**读失败或文件损坏时中止同步，绝不用本地数据覆盖云端** |
 | 定位到正在播放 | ✅ 列表高亮当前歌曲（播放指示器）+ 一键滚动定位并闪烁提示 |
-| 歌曲下载到本地 | ✅ 单曲 / 批量下载、进度与取消重试、离线播放、下载分栏与管理面板 |
+| 歌曲下载到本地 | ✅ 单曲 / 批量下载、进度与取消重试、离线播放、下载分栏与管理面板；先写 `.part` 校验长度后原子落盘 |
+| 写入安全 | ✅ 音频标签先改副本、校验可读回后原子替换；配置文件写入走临时文件 + `ATOMIC_MOVE`，中途崩溃不会丢设置 |
 | 后台常驻与系统控制 | ✅ 托盘常驻后台播放 + Windows 通知区域托盘图标（点击弹出应用内主题化控制面板）+ 系统媒体控制（SMTC 系统媒体浮层 / 锁屏显示当前曲目，全局媒体热键响应键盘媒体键） |
 | 界面缩放（HiDPI） | ✅ 跟随 Windows 显示缩放（屏幕 DPI / `sun.java2d.uiScale`），或手动 100% ~ 250%（设置 → 界面） |
 | 横屏（宽窗口）自适应 | ✅ 窗口 ≥ 900 dp 自动切多栏：设置两栏、首页卡片并排、歌词限宽居中；窄窗口保持单栏 |
@@ -316,6 +317,19 @@ MediaStore/SAF 流程，桌面端直接读写文件系统，改为「分析 → 
   按下即由应用自己处理，不依赖系统把按键派发给媒体会话
 - **歌曲变化通知**：窗口隐藏时发送系统通知（可在设置里关闭）
 - 窗口标题也会跟随显示「▶ 歌曲 - 歌手 · NeriPlayer」，任务栏一眼可见
+
+### 数据安全（同步与写盘）
+
+同步与写文件都按「宁可失败，也不破坏数据」处理：
+
+- **远端读不到 ≠ 远端没有数据**：拉取失败（断网、Token 失效、服务端 5xx）或同步文件解析失败时，
+  本次同步直接中止并提示原因，不会把本地快照推上去覆盖手机端的歌单与历史；
+- **先上传、后改本地**：合并结果只有在上传成功后才写回本地，上传失败时本地数据保持原样；
+- **同一时刻只跑一个同步**：自动同步发现已有同步在跑会跳过，避免两次同步互相覆盖；
+- **下载先写 `.part`**：校验 `Content-Length` 后再原子改名；中断只留下临时文件，不会让截断的音频进曲库；
+- **标签写副本**：下载与批量整理都是「复制一份 → 改副本 → 读回校验 → 原子替换」，
+  改标签时崩溃也不会损坏原音频；
+- **配置原子写**：设置、同步配置等 JSON 先写临时文件再 `ATOMIC_MOVE` 替换，旧实现「先删后改名」在两步之间崩溃会丢配置。
 - 设置页的「后台与系统控制」会实时显示两项状态：**系统通知区域**是否可用、
   **系统媒体控制**是否已接管以及当前后端
 
@@ -375,8 +389,8 @@ Windows 把「漫游配置」和「本机数据」分成两棵树，本应用同
 ```powershell
 gradlew run                    # 直接运行
 gradlew createDistributable    # 免安装应用目录：build\compose\binaries\main\app\NeriPlayer\
-gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.7.0.msi
-gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.7.0.exe
+gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.8.0.msi
+gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.8.0.exe
 ```
 
 - `gradlew` 是批处理包装脚本，在 CMD / PowerShell 里直接写 `gradlew`（或 `.\gradlew.bat`）；

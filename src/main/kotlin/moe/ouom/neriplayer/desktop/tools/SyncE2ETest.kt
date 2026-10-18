@@ -12,6 +12,7 @@ import moe.ouom.neriplayer.desktop.core.neteaseSongKey
 import moe.ouom.neriplayer.desktop.net.HttpService
 import moe.ouom.neriplayer.desktop.sync.GitHubSyncManager
 import moe.ouom.neriplayer.desktop.sync.GitHubSyncTransport
+import moe.ouom.neriplayer.desktop.sync.RemoteSyncRead
 import moe.ouom.neriplayer.desktop.sync.SyncConfigStore
 import moe.ouom.neriplayer.desktop.sync.SyncDataSerializer
 import moe.ouom.neriplayer.desktop.sync.SyncFavoritePlaylist
@@ -105,7 +106,7 @@ fun main() = runBlocking {
         println("[sync-e2e] 第二次同步：${secondSync.message}")
         expect("second-sync", secondSync.success, secondSync.message)
 
-        val remoteFile = transport.readSyncFile(login, repoName, useDataSaver = false)
+        val remoteFile = (transport.readSyncFile(login, repoName, useDataSaver = false) as? RemoteSyncRead.Found)?.file
         expect("remote-file-exists", remoteFile != null && remoteFile.content.isNotEmpty())
         val remoteData = remoteFile?.let { SyncDataSerializer.deserialize(it.content) }
         expect(

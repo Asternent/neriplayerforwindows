@@ -135,12 +135,16 @@ private fun decodeDownscaled(bytes: ByteArray, maxPx: Int): ImageBitmap? = runCa
     }
 }.getOrNull()
 
-private suspend fun loadRemoteBitmap(url: String, referer: String? = null): ImageBitmap? =
+private suspend fun loadRemoteBitmap(
+    url: String,
+    referer: String? = null,
+    maxPx: Int = ARTWORK_MAX_PX,
+): ImageBitmap? =
     withContext(Dispatchers.IO) {
         val cached = File(AppDirs.coverDir, url.hashCode().toString() + ".img")
         if (cached.isFile) {
             runCatching { cached.readBytes() }.getOrNull()?.let { bytes ->
-                decodeArtwork(bytes)?.let { return@withContext it }
+                decodeArtwork(bytes, maxPx)?.let { return@withContext it }
             }
         }
         val bytes = runCatching {
@@ -153,7 +157,7 @@ private suspend fun loadRemoteBitmap(url: String, referer: String? = null): Imag
             connection.getInputStream().use { it.readBytes() }
         }.getOrNull() ?: return@withContext null
         runCatching { cached.writeBytes(bytes) }
-        decodeArtwork(bytes)
+        decodeArtwork(bytes, maxPx)
     }
 
 private suspend fun loadSongArtwork(song: Song): ImageBitmap? = withContext(Dispatchers.IO) {
@@ -193,15 +197,17 @@ fun rememberArtwork(song: Song?): ImageBitmap? {
 }
 
 @Composable
-fun rememberRemoteArtwork(url: String?): ImageBitmap? {
+fun rememberRemoteArtwork(url: String?, maxPx: Int = ARTWORK_MAX_PX): ImageBitmap? {
     if (url.isNullOrBlank()) return null
-    val key = "url|$url"
+    // 头像 / 表情这类小图单独按请求尺寸解码并单独缓存：
+    // 全按 768px 解码会让一页评论的 20 个头像吃掉几十 MB，把封面缓存挤空。
+    val key = "url|$url|$maxPx"
     val state by produceState<Pair<String, ImageBitmap?>?>(initialValue = null, key) {
         val cached = ArtworkCache.get(key)
         value = key to cached
         if (cached != null) return@produceState
         if (ArtworkCache.hasFailed(key)) return@produceState
-        val loaded = loadRemoteBitmap(url)
+        val loaded = loadRemoteBitmap(url, maxPx = maxPx)
         if (loaded == null) {
             ArtworkCache.markFailed(key)
         } else {
@@ -265,8 +271,9 @@ fun RemoteArtwork(
     size: Dp,
     shape: RoundedCornerShape = RoundedCornerShape(10.dp),
     fallback: ImageVector = Icons.Filled.MusicNote,
+    maxPx: Int = ARTWORK_MAX_PX,
 ) {
-    val bitmap = rememberRemoteArtwork(url)
+    val bitmap = rememberRemoteArtwork(url, maxPx)
     ArtworkBox(
         painter = bitmap?.let { BitmapPainter(it) },
         modifier = Modifier.size(size),

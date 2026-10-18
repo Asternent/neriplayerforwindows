@@ -77,6 +77,18 @@ class AppContainer {
         downloads = downloadCatalog,
     )
 
+    /** 窗口显示后调用：补注册启动时因为窗口还不存在而失败的 SMTC 会话。 */
+    fun onMainWindowReady() {
+        if (!settings.current.mprisEnabled) return
+        scope.launch {
+            if (mediaControl.running) {
+                mediaControl.ensureSession()
+            } else {
+                mediaControl.start()
+            }
+        }
+    }
+
     /** 改了歌词来源、偏移或音译开关后调用：清空歌词缓存并重新加载当前歌曲。 */
     fun reloadLyricsAfterSourceChange() {
         lyrics.invalidateAll()
@@ -84,17 +96,25 @@ class AppContainer {
     }
 
     fun bootstrap(scanLibrary: Boolean = true) {
+        val startedAt = System.nanoTime()
+        fun mark(label: String) {
+            println("[boot]   $label +${(System.nanoTime() - startedAt) / 1_000_000}ms")
+        }
         library.load()
+        mark("library")
         downloadCatalog.load()
         accounts.load()
         playlists.load()
         history.load()
         stats.load()
+        mark("data-files")
         player.attachSnapshotFlow()
         player.restoreLastQueue()
+        mark("player-restore")
         scope.launch(Dispatchers.IO) { refreshAccountProfiles() }
         observeLocalChangesForAutoSync()
         startMediaControlBridge()
+        mark("bridges")
         if (scanLibrary) {
             scope.launch { library.scan() }
         }
@@ -150,7 +170,9 @@ class AppContainer {
                     continue
                 }
                 if (localRevision == lastSyncedRevision) continue
-                sync.performSync()
+                // 手动同步正在进行时别插队：并发同步会互相覆盖本地数据
+                if (sync.state.value.running) continue
+                runCatching { sync.performSync() }
                 lastSyncedRevision = localRevision
             }
         }

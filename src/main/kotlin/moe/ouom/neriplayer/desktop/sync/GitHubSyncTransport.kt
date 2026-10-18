@@ -27,6 +27,22 @@ data class RemoteSyncFile(
 )
 
 /**
+ * 读取远端同步文件的结果。
+ *
+ * 必须把「远端确实没有数据」和「这次没读到」分开：前者可以首次上传，
+ * 后者如果也当成没数据，就会拿本地快照覆盖掉手机上还没同步下来的歌单与历史。
+ */
+sealed interface RemoteSyncRead {
+    data class Found(val file: RemoteSyncFile) : RemoteSyncRead
+
+    /** 远端确实还没有同步文件（404 / 空仓库）。 */
+    data object Missing : RemoteSyncRead
+
+    /** 读取失败（网络、认证、服务端错误），此时绝不能再写。 */
+    data class Failed(val message: String) : RemoteSyncRead
+}
+
+/**
  * 与手机端一致：通过 GitHub Git 数据接口读写仓库根目录的同步文件，
  * 提交时带上 expected head（非快进提交会被拒绝）以避免覆盖其他设备的数据。
  */
@@ -116,22 +132,29 @@ class GitHubSyncTransport(
     }
 
     /** 读取同步文件：优先当前通道，其次兼容通道（与手机端一致）。 */
-    fun readSyncFile(owner: String, repo: String, useDataSaver: Boolean): RemoteSyncFile? {
-        val branch = repoDefaultBranch(owner, repo) ?: return null
-        val head = branchHead(owner, repo, branch) ?: return null
+    fun readSyncFile(owner: String, repo: String, useDataSaver: Boolean): RemoteSyncRead {
+        val branch = repoDefaultBranch(owner, repo)
+            ?: return RemoteSyncRead.Failed("无法读取仓库信息（Token 失效或没有权限）")
+        // 新建仓库还没有任何 commit 时读不到 HEAD：这是「远端没有数据」，不是失败
+        val head = branchHead(owner, repo, branch) ?: return RemoteSyncRead.Missing
         val candidates = listOf(SyncDataSerializer.fileNameFor(useDataSaver)) +
             SyncDataSerializer.readFallbackFileNames(useDataSaver)
+        var failure: String? = null
         candidates.forEach { path ->
             val response = http.execute(
                 "GET",
                 api("repos/$owner/$repo/contents/$path?ref=$branch"),
                 headers = headers(mapOf("Accept" to "application/vnd.github.raw")),
             )
-            if (response != null && response.status == 200 && response.bytes.isNotEmpty()) {
-                return RemoteSyncFile(response.bytes, head, path)
+            when {
+                response == null -> failure = "网络请求失败"
+                response.status == 200 && response.bytes.isNotEmpty() ->
+                    return RemoteSyncRead.Found(RemoteSyncFile(response.bytes, head, path))
+                response.status == 404 -> Unit
+                else -> failure = "HTTP ${response.status}"
             }
         }
-        return null
+        return failure?.let { RemoteSyncRead.Failed(it) } ?: RemoteSyncRead.Missing
     }
 
     /** 提交同步文件；expectedHead 为空表示这是首次写入。 */

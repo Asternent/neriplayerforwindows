@@ -199,7 +199,9 @@ fun biliCommentFromJson(item: JsonObjectSelf): Comment? {
     val id = item.long("rpid") ?: return null
     val contentObject = item.obj("content")
     val content = contentObject?.str("message")?.trim().orEmpty()
-    if (content.isEmpty()) return null
+    val images = biliImagesIn(contentObject)
+    // 哔哩哔哩允许「只发图不写字」，这种评论同样要保留
+    if (content.isEmpty() && images.isEmpty()) return null
     val member = item.obj("member")
     return Comment(
         id = id.toString(),
@@ -215,7 +217,7 @@ fun biliCommentFromJson(item: JsonObjectSelf): Comment? {
         replies = item.array("replies")?.objects().orEmpty()
             .mapNotNull { biliCommentFromJson(JsonObjectSelf(it)) },
         emotes = biliEmotesIn(contentObject),
-        images = biliImagesIn(contentObject),
+        images = images,
         userLevel = member?.obj("level_info")?.long("current_level")?.toInt()?.takeIf { it > 0 },
     )
 }

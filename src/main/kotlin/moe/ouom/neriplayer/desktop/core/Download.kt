@@ -5,12 +5,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import moe.ouom.neriplayer.desktop.net.OnlineRepository
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** 已下载到本地的歌曲记录。 */
 @Serializable
@@ -81,16 +85,18 @@ class DownloadCatalog(catalogFile: File = AppDirs.downloadCatalogFile) {
             .associateBy { it.songKey }
     }
 
-    private fun persist() = store.save(_items.value.values.toList())
+    private fun persist(snapshot: Map<String, DownloadedSong> = _items.value) =
+        store.save(snapshot.values.toList())
 
     fun record(entry: DownloadedSong) {
-        _items.value = _items.value + (entry.songKey to entry)
-        persist()
+        // 多个下载同时完成时，读-改-写会互相覆盖，把刚下好的记录弄丢
+        val updated = _items.updateAndGet { current -> current + (entry.songKey to entry) }
+        persist(updated)
     }
 
     fun remove(songKey: String) {
-        _items.value = _items.value - songKey
-        persist()
+        val updated = _items.updateAndGet { current -> current - songKey }
+        persist(updated)
     }
 
     fun fileFor(songKey: String): File? = _items.value[songKey]?.filePath?.let { File(it) }?.takeIf { it.isFile }
@@ -120,8 +126,9 @@ class DownloadManager(
     private val _activeCount = MutableStateFlow(0)
     val activeCount: StateFlow<Int> = _activeCount.asStateFlow()
 
-    private val canceled = HashSet<String>()
-    private var running = false
+    // cancel() 在 UI 线程调用、runTask 在 IO 线程读取：用并发集合，别用 HashSet
+    private val canceled = ConcurrentHashMap.newKeySet<String>()
+    private val running = AtomicBoolean(false)
 
     fun downloadDirectory(): File {
         directoryOverride?.let { return it }
@@ -142,7 +149,7 @@ class DownloadManager(
         val newTasks = added.map { song ->
             DownloadTask(id = UUID.randomUUID().toString(), song = song)
         }
-        _tasks.value = _tasks.value + newTasks
+        appendTasks(newTasks)
         showMessage?.invoke("已加入下载队列：${added.size} 首")
         startWorkers()
         return added.size
@@ -150,7 +157,7 @@ class DownloadManager(
 
     fun cancel(taskId: String) {
         canceled += taskId
-        _tasks.value = _tasks.value.map { task ->
+        mutateTasks { task ->
             if (task.id == taskId && task.state in setOf(DownloadState.QUEUED, DownloadState.RUNNING)) {
                 task.copy(state = DownloadState.CANCELED, error = "已取消")
             } else {
@@ -160,8 +167,8 @@ class DownloadManager(
     }
 
     fun retry(taskId: String) {
-        canceled -= taskId
-        _tasks.value = _tasks.value.map { task ->
+        canceled.remove(taskId)
+        mutateTasks { task ->
             if (task.id == taskId && task.state in setOf(DownloadState.FAILED, DownloadState.CANCELED)) {
                 task.copy(state = DownloadState.QUEUED, error = null, downloadedBytes = 0L)
             } else {
@@ -172,15 +179,15 @@ class DownloadManager(
     }
 
     fun removeFinished() {
-        _tasks.value = _tasks.value.filter {
-            it.state in setOf(DownloadState.QUEUED, DownloadState.RUNNING)
+        _tasks.update { list ->
+            list.filter { it.state in setOf(DownloadState.QUEUED, DownloadState.RUNNING) }
         }
     }
 
     fun clearAll() {
         _tasks.value.filter { it.state in setOf(DownloadState.QUEUED, DownloadState.RUNNING) }
             .forEach { cancel(it.id) }
-        _tasks.value = emptyList()
+        _tasks.update { emptyList() }
     }
 
     /** 删除已下载文件（同时移除记录）。 */
@@ -191,9 +198,17 @@ class DownloadManager(
         return deleted
     }
 
+    /** 任务列表的修改统一走这里：进度回调、取消、失败可能来自不同线程。 */
+    private fun mutateTasks(transform: (DownloadTask) -> DownloadTask) {
+        _tasks.update { list -> list.map(transform) }
+    }
+
+    private fun appendTasks(tasks: List<DownloadTask>) {
+        _tasks.update { it + tasks }
+    }
+
     private fun startWorkers() {
-        if (running) return
-        running = true
+        if (!running.compareAndSet(false, true)) return
         scope.launch {
             try {
                 while (true) {
@@ -213,14 +228,14 @@ class DownloadManager(
                     kotlinx.coroutines.delay(200)
                 }
             } finally {
-                running = false
+                running.set(false)
                 updateActiveCount()
             }
         }
     }
 
     private fun markRunning(taskId: String) {
-        _tasks.value = _tasks.value.map { task ->
+        mutateTasks { task ->
             if (task.id == taskId) task.copy(state = DownloadState.RUNNING) else task
         }
         updateActiveCount()
@@ -242,11 +257,15 @@ class DownloadManager(
             return
         }
         val target = buildTargetFile(song, input!!.url)
+        // 先写 .part 再原子改名：中断/断网只会留下半截临时文件，不会让截断的音频被扫描进曲库
+        val part = File(target.parentFile, "${target.name}.part")
+        var expectedTotal = 0L
         var lastError: String? = null
         val ok = runCatching {
-            online.httpService.downloadToFile(input.url!!, input.headers, target) { downloaded, total ->
+            online.httpService.downloadToFile(input.url!!, input.headers, part) { downloaded, total ->
                 if (canceled.contains(task.id)) throw DownloadCanceledException()
-                _tasks.value = _tasks.value.map { item ->
+                if (total > 0) expectedTotal = total
+                mutateTasks { item ->
                     if (item.id == task.id) {
                         item.copy(
                             downloadedBytes = downloaded,
@@ -262,15 +281,42 @@ class DownloadManager(
             false
         }
         if (canceled.contains(task.id)) {
-            runCatching { target.delete() }
-            _tasks.value = _tasks.value.map {
+            runCatching { part.delete() }
+            mutateTasks {
                 if (it.id == task.id) it.copy(state = DownloadState.CANCELED, error = "已取消") else it
             }
             updateActiveCount()
             return
         }
         if (!ok) {
+            runCatching { part.delete() }
             fail(task.id, lastError ?: "下载失败")
+            return
+        }
+        // 服务器提前断开时 downloadToFile 仍可能返回 true，这里按 Content-Length 再核对一次
+        if (expectedTotal > 0 && part.length() != expectedTotal) {
+            val actual = part.length()
+            runCatching { part.delete() }
+            fail(task.id, "下载不完整（$actual/$expectedTotal 字节），请重试")
+            return
+        }
+        val moved = runCatching {
+            java.nio.file.Files.move(
+                part.toPath(),
+                target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+        }.recoverCatching {
+            java.nio.file.Files.move(
+                part.toPath(),
+                target.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            )
+        }.isSuccess
+        if (!moved) {
+            runCatching { part.delete() }
+            fail(task.id, "无法写入下载目录")
             return
         }
 
@@ -297,7 +343,7 @@ class DownloadManager(
                 downloadedAt = System.currentTimeMillis(),
             )
         )
-        _tasks.value = _tasks.value.map {
+        mutateTasks {
             if (it.id == task.id) {
                 it.copy(state = DownloadState.DONE, filePath = target.absolutePath, downloadedBytes = size, totalBytes = size)
             } else {
@@ -364,7 +410,7 @@ class DownloadManager(
     }
 
     private fun fail(taskId: String, message: String) {
-        _tasks.value = _tasks.value.map { task ->
+        mutateTasks { task ->
             if (task.id == taskId) task.copy(state = DownloadState.FAILED, error = message) else task
         }
         updateActiveCount()

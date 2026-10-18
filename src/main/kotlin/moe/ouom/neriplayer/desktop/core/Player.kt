@@ -218,12 +218,20 @@ class PlayerManager(
     fun removeFromQueue(index: Int) {
         val list = _queue.value.toMutableList()
         if (index !in list.indices) return
+        val removedCurrent = index == _currentIndex.value
         list.removeAt(index)
         _queue.value = list
         when {
-            list.isEmpty() -> clearQueue()
+            list.isEmpty() -> {
+                clearQueue()
+                return
+            }
+            // 删掉的是当前项：下标可能已经越界（原来是最后一项），先夹到合法范围再重新加载
+            removedCurrent -> {
+                _currentIndex.value = _currentIndex.value.coerceIn(0, list.lastIndex)
+                playCurrent()
+            }
             index < _currentIndex.value -> _currentIndex.value -= 1
-            index == _currentIndex.value -> playCurrent()
         }
         rebuildShuffleOrder(_currentIndex.value)
     }
@@ -249,7 +257,8 @@ class PlayerManager(
     }
 
     fun play() {
-        if (_currentSong.value == null) {
+        val song = _currentSong.value
+        if (song == null) {
             val queue = _queue.value
             if (queue.isNotEmpty()) {
                 _currentIndex.value = _currentIndex.value.coerceIn(0, queue.lastIndex)
@@ -257,7 +266,9 @@ class PlayerManager(
             }
             return
         }
-        if (_state.value == PlaybackState.ERROR || engine.snapshot.value.error != null) {
+        // 恢复上次会话时只有「当前歌曲」，解码器里并没有输入；直接 engine.play() 会静默无声
+        val hasRealInput = currentPlayingKey == song.key && _state.value != PlaybackState.PREPARING
+        if (!hasRealInput || _state.value == PlaybackState.ERROR || engine.snapshot.value.error != null) {
             playCurrent()
             return
         }
@@ -268,6 +279,8 @@ class PlayerManager(
 
     fun pause() {
         flushListeningTime()
+        // flush 之后 state 还是 PLAYING，会把它重新置为「现在」；暂停期间的时间不能算进收听时长
+        playbackStartedAt = 0L
         engine.pause()
         _state.value = PlaybackState.PAUSED
     }

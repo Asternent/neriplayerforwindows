@@ -29,7 +29,22 @@ class OnlineRepository(private val http: HttpService = HttpService()) {
     val collectionCovers: kotlinx.coroutines.flow.StateFlow<Map<String, String>> = _collectionCovers
 
     fun coverFor(collection: OnlineCollection): String? =
-        collection.coverUrl ?: _collectionCovers.value[collection.id]
+        collection.coverUrl ?: _collectionCovers.value[coverCacheKey(collection)]
+
+    /** 网易云歌单与 B 站收藏夹的 id 都是数字串，缓存键必须带上来源，否则会串封面。 */
+    private fun coverCacheKey(collection: OnlineCollection): String =
+        "${collection.source.name}:${collection.id}"
+
+    /** 只保留最近打开过的若干收藏夹封面，防止一路浏览把内存堆满。 */
+    private fun rememberCollectionCover(collection: OnlineCollection, cover: String) {
+        val next = LinkedHashMap(_collectionCovers.value)
+        next[coverCacheKey(collection)] = cover
+        while (next.size > 200) {
+            val oldest = next.keys.firstOrNull() ?: break
+            next.remove(oldest)
+        }
+        _collectionCovers.value = next
+    }
 
     val netease = NeteaseApi(http)
     val bilibili = BiliApi(http)
@@ -202,7 +217,7 @@ class OnlineRepository(private val http: HttpService = HttpService()) {
     }.also { loaded ->
         if (collection.coverUrl.isNullOrBlank()) {
             loaded.firstOrNull()?.artworkUrl?.let { cover ->
-                _collectionCovers.value = _collectionCovers.value + (collection.id to cover)
+                rememberCollectionCover(collection, cover)
             }
         }
     }
