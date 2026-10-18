@@ -260,12 +260,23 @@ private suspend fun checkLyricSources(online: OnlineRepository) {
     val ttml = "<tt><body><div>" +
         "<p begin=\"00:01.737\" end=\"00:06.722\"><span begin=\"00:01.737\">沈</span><span>む</span></p>" +
         "<p begin=\"01:02.189\" end=\"01:04.033\"><span>鳴る</span><span>&amp;夜</span></p>" +
+        "<p begin=\"00:10.000\"><span>本&#39;文</span>" +
+        "<span ttm:role=\"x-translation\">translated &#x2019;line</span></p>" +
         "</div></body></tt>"
     val ttmlLines = lrc.parse(AmllProvider.parseTtml(ttml))
-    check("amll-ttml-line-count", ttmlLines.size == 2, "${ttmlLines.map { it.timeMs }}")
-    check("amll-ttml-text", ttmlLines.firstOrNull()?.text == "沈む", "${ttmlLines.firstOrNull()?.text}")
-    check("amll-ttml-minutes", ttmlLines.getOrNull(1)?.timeMs == 62_189L, "${ttmlLines.getOrNull(1)?.timeMs}")
-    check("amll-ttml-entities", ttmlLines.getOrNull(1)?.text == "鳴る&夜", "${ttmlLines.getOrNull(1)?.text}")
+    check("amll-ttml-line-count", ttmlLines.size == 4, "${ttmlLines.map { it.timeMs }}")
+    check("amll-ttml-text", ttmlLines.firstOrNull { it.timeMs == 1_737L }?.text == "沈む",
+        "${ttmlLines.firstOrNull { it.timeMs == 1_737L }?.text}")
+    val ttmlAt62 = ttmlLines.firstOrNull { it.timeMs == 62_189L }
+    check("amll-ttml-minutes", ttmlAt62 != null, "${ttmlLines.map { it.timeMs }}")
+    check("amll-ttml-entities", ttmlAt62?.text == "鳴る&夜", "${ttmlAt62?.text}")
+    // ttm:role 的翻译行不能拼进正文，还要单独成行（同时间戳 → LrcParser 会当成翻译）
+    val ttmlAt10 = ttmlLines.filter { it.timeMs == 10_000L }.map { it.text }
+    check(
+        "amll-ttml-role-split",
+        ttmlAt10 == listOf("本'文", "translated ’line"),
+        "$ttmlAt10",
+    )
 
     // ---------------------------------------------------------- 歌词第二行模式
     val none = LyricsSecondaryLineMode.NONE

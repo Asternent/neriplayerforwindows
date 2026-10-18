@@ -84,7 +84,7 @@ private fun normalizeTitle(value: String): String =
 class LrclibProvider(private val http: HttpService) {
 
     private val headers = mapOf(
-        "User-Agent" to "NeriPlayer/1.4.7 (https://github.com/Asternent/neriplayerforwindows)",
+        "User-Agent" to "NeriPlayer/${moe.ouom.neriplayer.desktop.core.BuildInfo.VERSION} (https://github.com/Asternent/neriplayerforwindows)",
     )
 
     suspend fun fetch(song: Song): LyricQueryResult? {
@@ -200,7 +200,7 @@ class KugouProvider(private val http: HttpService) {
 class AmllProvider(private val http: HttpService) {
 
     private val headers = mapOf(
-        "User-Agent" to "NeriPlayer/1.4.7",
+        "User-Agent" to "NeriPlayer/${moe.ouom.neriplayer.desktop.core.BuildInfo.VERSION}",
         "Content-Type" to "application/json; charset=utf-8",
     )
 
@@ -241,7 +241,9 @@ class AmllProvider(private val http: HttpService) {
             } ?: return null
 
         val file = best.str("file")?.takeIf { !it.contains('/') } ?: return null
-        val ttml = http.get("https://amlldb.bikonoo.com/raw-lyrics/$file", headers, timeoutSeconds = 20) ?: return null
+        // 文件名里可能有空格 / # / ？：必须编码，否则 URI 非法、请求会静默失败
+        val encodedFile = java.net.URLEncoder.encode(file, Charsets.UTF_8).replace("+", "%20")
+        val ttml = http.get("https://amlldb.bikonoo.com/raw-lyrics/$encodedFile", headers, timeoutSeconds = 20) ?: return null
         val raw = parseTtml(ttml).takeIf { it.isNotBlank() } ?: return null
         return LyricQueryResult(raw = raw, source = "AMLL TTML DB")
     }
@@ -255,7 +257,7 @@ class AmllProvider(private val http: HttpService) {
                 java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
                     .timeout(java.time.Duration.ofSeconds(20))
                     .header("Content-Type", "application/json; charset=utf-8")
-                    .header("User-Agent", "NeriPlayer/1.4.7")
+                    .header("User-Agent", "NeriPlayer/${moe.ouom.neriplayer.desktop.core.BuildInfo.VERSION}")
                     .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body, Charsets.UTF_8))
                     .build(),
                 java.net.http.HttpResponse.BodyHandlers.ofString(Charsets.UTF_8),
@@ -288,26 +290,39 @@ class AmllProvider(private val http: HttpService) {
         private val beginRegex = Regex("""begin\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
         private val tagRegex = Regex("<[^>]+>")
 
+        /** AMLL 的翻译 / 音译是带 `ttm:role` 的内层 span，不能和正文拼在一起。 */
+        private val roleSpanRegex = Regex(
+            """<span\b[^>]*ttm:role\s*=\s*"x-(translation|romanization)"[^>]*>(.*?)</span>""",
+            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
+        )
+
         /** 把 TTML 转成 LRC 文本，复用现成的 LrcParser。 */
         fun parseTtml(ttml: String): String {
             val builder = StringBuilder()
             paragraphRegex.findAll(ttml).forEach { match ->
                 val begin = beginRegex.find(match.groupValues[1])?.groupValues?.get(1) ?: return@forEach
                 val timeMs = parseTimeMs(begin) ?: return@forEach
-                val text = decodeEntities(match.groupValues[2].replace(tagRegex, "")).trim()
-                if (text.isEmpty()) return@forEach
-                builder.append('[')
-                    .append(
-                        // 保留到毫秒：LRC 支持三位小数，写成两位会白白丢掉最多 9ms 的对齐精度
-                        "%02d:%02d.%03d".format(
-                            timeMs / 60_000L,
-                            timeMs / 1_000L % 60L,
-                            timeMs % 1_000L,
-                        ),
-                    )
-                    .append(']')
-                    .append(text)
-                    .append('\n')
+                val paragraph = match.groupValues[2]
+                // 先摘出翻译 span，正文里只留原文，避免整句翻译被拼进原文
+                val translations = ArrayList<String>()
+                roleSpanRegex.findAll(paragraph).forEach { span ->
+                    if (span.groupValues[1].equals("translation", ignoreCase = true)) {
+                        val translated = decodeEntities(span.groupValues[2].replace(tagRegex, "")).trim()
+                        if (translated.isNotEmpty()) translations += translated
+                    }
+                }
+                val mainHtml = roleSpanRegex.replace(paragraph, "")
+                val text = decodeEntities(mainHtml.replace(tagRegex, "")).trim()
+                if (text.isEmpty() && translations.isEmpty()) return@forEach
+                val stamp = "[%02d:%02d.%03d]".format(
+                    // 保留到毫秒：LRC 支持三位小数，写成两位会白白丢掉最多 9ms 的对齐精度
+                    timeMs / 60_000L,
+                    timeMs / 1_000L % 60L,
+                    timeMs % 1_000L,
+                )
+                builder.append(stamp).append(text).append('\n')
+                // 翻译行用相同时间戳：LrcParser 会把同时间戳的第二行识别为翻译
+                translations.forEach { builder.append(stamp).append(it).append('\n') }
             }
             return builder.toString()
         }
@@ -324,13 +339,23 @@ class AmllProvider(private val http: HttpService) {
             }.getOrNull()
         }
 
-        private fun decodeEntities(value: String): String = value
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&nbsp;", " ")
-            .replace("&amp;", "&")
+        private fun decodeEntities(value: String): String {
+            val named = value
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'")
+                .replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+            // 数字实体（&#39; / &#x2019;）之前会原样显示
+            return Regex("""&#(x?[0-9a-fA-F]+);""").replace(named) { match ->
+                val raw = match.groupValues[1]
+                val code = runCatching {
+                    if (raw.startsWith("x", ignoreCase = true)) raw.drop(1).toInt(16) else raw.toInt()
+                }.getOrNull()
+                code?.takeIf { it in 0..0x10FFFF }?.let { String(Character.toChars(it)) } ?: match.value
+            }
+        }
     }
 }
 

@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Comment
+import androidx.compose.material.icons.outlined.BrokenImage
 import androidx.compose.material.icons.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material3.CircularProgressIndicator
@@ -561,6 +562,7 @@ private fun CommentImageGrid(
 @Composable
 private fun CommentThumb(image: CommentImage, modifier: Modifier = Modifier) {
     val bitmap = rememberRemoteArtwork(image.url, maxPx = 640)
+    val failed = artworkLoadFailed(image.url, maxPx = 640)
     if (bitmap != null) {
         Image(
             bitmap = bitmap,
@@ -573,7 +575,16 @@ private fun CommentThumb(image: CommentImage, modifier: Modifier = Modifier) {
             modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center,
         ) {
-            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+            if (failed) {
+                Icon(
+                    Icons.Outlined.BrokenImage,
+                    contentDescription = "配图加载失败",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            } else {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+            }
         }
     }
 }

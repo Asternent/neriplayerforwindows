@@ -12,11 +12,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Pause
@@ -383,6 +386,7 @@ fun NowPlayingScreen(
             QueuePanel(
                 queue = queue,
                 currentIndex = currentIndex,
+                isPlaying = state == PlaybackState.PLAYING,
                 onClose = { showQueue = false },
                 onPlayIndex = { index ->
                     container.player.setQueue(queue, index, autoPlay = true)
@@ -449,7 +453,12 @@ fun NowPlayingScreen(
                 onDismissRequest = { showAddToPlaylist = false },
                 title = { Text("添加到歌单") },
                 text = {
-                    Column {
+                    // 歌单多的时候要能滚动，否则对话框下面的歌单点不到
+                    Column(
+                        Modifier
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
                         playlists.forEach { playlist ->
                             Text(
                                 text = playlist.name + if (playlist.system) "（我喜欢的音乐）" else "",

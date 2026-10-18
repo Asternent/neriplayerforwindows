@@ -3,6 +3,7 @@ package moe.ouom.neriplayer.desktop.core
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.InputStream
@@ -47,6 +48,12 @@ interface AudioEngine {
     fun pause()
     fun release()
     fun seekTo(positionMs: Long)
+
+    /**
+     * 回到 0 但**不**启动解码管道（播放到队列末尾时用）。
+     * 默认等价于 seekTo(0)，由具体引擎覆盖以避免白起一个进程。
+     */
+    fun rewind() = seekTo(0)
     fun setVolume(volume: Float)
     fun setSpeed(speed: Float)
     fun setPitch(semitones: Float)
@@ -165,15 +172,41 @@ class FfmpegAudioEngine : AudioEngine {
     }
 
     override fun prepare(durationMs: Long) {
+        // 切歌时必须真的停掉上一条管道：只改进度会让上一首继续响到新地址解析完成
         synchronized(lock) {
+            generation += 1
+            stopPipelineLocked()
+            input = null
+            playRequested = false
+            paused = false
             offsetMs = 0L
             this.durationMs = durationMs
         }
+        synchronized(pauseGate) { pauseGate.notifyAll() }
         _snapshot.value = EngineSnapshot(
             positionMs = 0L,
             durationMs = durationMs,
             playing = false,
             buffering = true,
+        )
+    }
+
+    /** 播放到队列末尾：回到 0 但不新起解码进程。 */
+    override fun rewind() {
+        val keepDuration = synchronized(lock) {
+            generation += 1
+            stopPipelineLocked()
+            playRequested = false
+            paused = false
+            offsetMs = 0L
+            durationMs
+        }
+        synchronized(pauseGate) { pauseGate.notifyAll() }
+        _snapshot.value = EngineSnapshot(
+            positionMs = 0L,
+            durationMs = keepDuration,
+            playing = false,
+            buffering = false,
         )
     }
 
@@ -424,6 +457,8 @@ class FfmpegAudioEngine : AudioEngine {
             runCatching { inputStream.close() }
             val stillCurrent = synchronized(lock) { generation == myGeneration }
             if (finishedNormally && stillCurrent) {
+                // 自然播完：清掉播放请求，否则 ticker 会把状态又写成「正在播放」
+                synchronized(lock) { playRequested = false }
                 runCatching { line.drain() }
                 runCatching { line.stop() }
                 _snapshot.value = _snapshot.value.copy(
@@ -465,11 +500,14 @@ class FfmpegAudioEngine : AudioEngine {
             val active = synchronized(lock) { line != null }
             if (!active) continue
             val position = currentPositionMs()
-            val playingNow = synchronized(lock) { playRequested }
-            _snapshot.value = _snapshot.value.copy(
-                positionMs = if (playingNow) position else _snapshot.value.positionMs,
-                playing = playingNow,
-            )
+            val playingNow = synchronized(lock) { playRequested && line != null }
+            // 用 update 做原子改写：与 open/pause 的并发写不会互相覆盖 buffering / error
+            _snapshot.update { current ->
+                current.copy(
+                    positionMs = if (playingNow) position else current.positionMs,
+                    playing = playingNow,
+                )
+            }
         }
     }
 

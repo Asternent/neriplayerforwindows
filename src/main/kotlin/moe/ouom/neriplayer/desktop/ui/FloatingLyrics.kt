@@ -96,7 +96,6 @@ fun FloatingLyricsWindow(
 ) {
     val song by container.player.currentSong.collectAsState()
     val lyrics by container.player.lyrics.collectAsState()
-    val positionMs by container.player.positionMs.collectAsState()
     val playbackState by container.player.state.collectAsState()
 
     val screenBounds = remember {
@@ -194,7 +193,12 @@ fun FloatingLyricsWindow(
         windowState.position = WindowPosition(x.dp, y.dp)
     }
 
-    val currentLineIndex = remember(lyrics, positionMs) { currentLyricIndex(lyrics.lines, positionMs) }
+    // 只有「当前歌词行」变了才重组：进度每 200ms 变一次，但行几秒才换一次
+    val currentLineIndex by remember(lyrics) {
+        androidx.compose.runtime.derivedStateOf {
+            currentLyricIndex(lyrics.lines, container.player.positionMs.value)
+        }
+    }
     val currentLine = lyrics.lines.getOrNull(currentLineIndex)
     val lyricText = currentLine?.text?.takeIf { it.isNotBlank() }
         ?: when {

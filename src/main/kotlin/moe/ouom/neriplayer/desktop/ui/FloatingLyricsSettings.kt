@@ -290,6 +290,7 @@ private fun ColorRow(
                     .size(28.dp)
                     .clip(CircleShape)
                     .background(option.color)
+                    .colorSwatch(option.label, isSelected)
                     .border(
                         width = if (isSelected) 3.dp else 1.dp,
                         color = if (isSelected) {

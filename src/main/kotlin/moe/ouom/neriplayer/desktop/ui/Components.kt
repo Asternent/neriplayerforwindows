@@ -43,6 +43,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -282,29 +288,34 @@ fun SongRow(
     }
 }
 
-/** 正在播放指示器：播放时是跳动的三根音量条，暂停时静止。 */
+/** 正在播放指示器：播放时是跳动的三根音量条，暂停时静止（不跑动画，避免暂停还 60fps 重绘）。 */
 @Composable
 fun PlayingIndicator(
     isPlaying: Boolean,
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.primary,
 ) {
-    val transition = rememberInfiniteTransition(label = "playing-indicator")
-    val phase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = keyframes {
-                durationMillis = 900
-                0f at 0
-                1f at 300
-                0.35f at 600
-                1f at 900
-            },
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "playing-phase",
-    )
+    val phase = if (isPlaying) {
+        val transition = rememberInfiniteTransition(label = "playing-indicator")
+        val animated by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = keyframes {
+                    durationMillis = 900
+                    0f at 0
+                    1f at 300
+                    0.35f at 600
+                    1f at 900
+                },
+                repeatMode = RepeatMode.Restart,
+            ),
+            label = "playing-phase",
+        )
+        animated
+    } else {
+        0f
+    }
     Canvas(modifier) {
         val barWidth = size.width / 5f
         val ratios = if (isPlaying) {
@@ -502,3 +513,14 @@ fun SectionSurface(
         content = { Box(Modifier.padding(vertical = 6.dp)) { content() } },
     )
 }
+
+/** 色板圆点：给读屏一个名字与「单选」语义，并允许键盘聚焦。 */
+@Composable
+fun Modifier.colorSwatch(label: String, isSelected: Boolean): Modifier =
+    this
+        .semantics {
+            role = Role.RadioButton
+            selected = isSelected
+            contentDescription = label
+        }
+        .focusable()

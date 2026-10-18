@@ -404,6 +404,7 @@ fun OverlayPanel(
 fun QueuePanel(
     queue: List<Song>,
     currentIndex: Int,
+    isPlaying: Boolean,
     onClose: () -> Unit,
     onPlayIndex: (Int) -> Unit,
     onRemoveIndex: (Int) -> Unit,
@@ -411,6 +412,8 @@ fun QueuePanel(
     onClear: () -> Unit,
 ) {
     OverlayPanel(title = "播放队列（${queue.size} 首）", onClose = onClose) {
+        // 队列里可能有重复歌曲：key 用身份，重复时才退回下标，避免整段列表重建
+        val keyCounts = remember(queue) { queue.groupingBy { it.key }.eachCount() }
         if (queue.isEmpty()) {
             EmptyState(
                 title = "播放队列是空的",
@@ -448,7 +451,13 @@ fun QueuePanel(
                     state = listState,
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp),
                 ) {
-                    itemsIndexed(queue, key = { index, song -> "$index:${song.key}" }) { index, song ->
+                    // 用歌曲身份做 key：按下标当 key 会让插入/排序后整段列表重建
+                    itemsIndexed(
+                        queue,
+                        key = { index, song ->
+                            if (keyCounts[song.key] == 1) song.key else "${song.key}#$index"
+                        },
+                    ) { index, song ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -467,7 +476,7 @@ fun QueuePanel(
                         ) {
                             Box(Modifier.width(26.dp), contentAlignment = Alignment.Center) {
                                 if (index == currentIndex) {
-                                    PlayingIndicator(isPlaying = true, modifier = Modifier.size(14.dp))
+                                    PlayingIndicator(isPlaying = isPlaying, modifier = Modifier.size(14.dp))
                                 } else {
                                     Text(
                                         text = (index + 1).toString(),

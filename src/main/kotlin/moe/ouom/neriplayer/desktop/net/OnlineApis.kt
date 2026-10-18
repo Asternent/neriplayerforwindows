@@ -414,19 +414,26 @@ class BiliApi(private val http: HttpService) {
     private val headers = mapOf("Referer" to "https://www.bilibili.com/")
 
     private var wbiKeys: Pair<String, String>? = null
+    private var wbiFetchedAt = 0L
     private var cookieReady = false
+    private val cookieLock = Any()
 
     private fun ensureCookies() {
         if (cookieReady) return
-        cookieReady = true
-        runCatching {
-            // 先访问主页拿到 buvid3 / b_nut，再补一份指纹 Cookie，降低接口风控概率
-            http.get("https://www.bilibili.com/", mapOf("Referer" to "https://www.bilibili.com/"), timeoutSeconds = 12)
+        synchronized(cookieLock) {
+            if (cookieReady) return
+            // 只有真的拿到响应才算就绪：以前先把标志置 true，一次失败就再也不补指纹 Cookie
+            val home = http.get(
+                "https://www.bilibili.com/",
+                mapOf("Referer" to "https://www.bilibili.com/"),
+                timeoutSeconds = 12,
+            )
             val spi = http.get("https://api.bilibili.com/x/frontend/finger/spi", headers)
             NeriJsonParser.parse(spi.orEmpty()).asObject()?.obj("data")?.let { data ->
                 data.str("b_3")?.let { http.setCookie("api.bilibili.com", "buvid3", it) }
                 data.str("b_4")?.let { http.setCookie("api.bilibili.com", "buvid4", it) }
             }
+            cookieReady = home != null || spi != null
         }
     }
 
@@ -447,7 +454,9 @@ class BiliApi(private val http: HttpService) {
     )
 
     private fun loadWbiKeys(): Pair<String, String>? {
-        wbiKeys?.let { return it }
+        // B 站每天轮换 wbi key：缓存 12 小时后主动重新取，别一直用到失效
+        val cached = wbiKeys
+        if (cached != null && System.currentTimeMillis() - wbiFetchedAt < WBI_KEY_TTL_MS) return cached
         ensureCookies()
         val text = http.get("https://api.bilibili.com/x/web-interface/nav", headers) ?: return null
         val wbi = NeriJsonParser.parse(text).asObject()?.obj("data")?.obj("wbi_img") ?: return null
@@ -456,6 +465,7 @@ class BiliApi(private val http: HttpService) {
         if (imgKey.isEmpty() || subKey.isEmpty()) return null
         val keys = imgKey to subKey
         wbiKeys = keys
+        wbiFetchedAt = System.currentTimeMillis()
         return keys
     }
 
@@ -469,6 +479,7 @@ class BiliApi(private val http: HttpService) {
 
     private fun refreshWbiKeys() {
         wbiKeys = null
+        wbiFetchedAt = 0L
     }
 
     private fun signedQuery(params: Map<String, String>): String? {
@@ -494,9 +505,9 @@ class BiliApi(private val http: HttpService) {
             "page_size" to "30",
         )
         var lastRoot: kotlinx.serialization.json.JsonObject? = null
-        repeat(3) { attempt ->
+        repeat(2) { attempt ->
             if (attempt > 0) {
-                Thread.sleep(600L * attempt)
+                Thread.sleep(300L)
                 refreshWbiKeys()
             }
             lastRoot = wbiRequest("https://api.bilibili.com/x/web-interface/wbi/search/type", params)
@@ -633,9 +644,9 @@ class BiliApi(private val http: HttpService) {
             "fourk" to "1",
         )
         var dash: kotlinx.serialization.json.JsonObject? = null
-        for (attempt in 0 until 3) {
+        for (attempt in 0 until 2) {
             if (attempt > 0) {
-                Thread.sleep(500L * attempt)
+                Thread.sleep(300L)
                 refreshWbiKeys()
             }
             var root = wbiRequest("https://api.bilibili.com/x/player/wbi/playurl", params)
@@ -733,3 +744,7 @@ fun favoriteMediaToSong(item: JsonObjectSelf): Song? {
         artworkUrl = normalizeImageUrl(item.str("cover")),
     )
 }
+
+
+/** wbi key 的有效期：B 站每天轮换，12 小时足够保守。 */
+private const val WBI_KEY_TTL_MS = 12L * 60 * 60 * 1000

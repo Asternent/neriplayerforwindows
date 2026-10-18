@@ -63,10 +63,16 @@ class OnlineRepository(private val http: HttpService = HttpService()) {
         if (query.isBlank()) return@withContext SearchPayload()
         when (source) {
             MediaSource.NETEASE -> when (kind) {
+                // 歌单 / 歌手 / 专辑以前固定从第 1 页取，翻页会一直重复第一页
                 SearchKind.SONG -> SearchPayload(songs = netease.searchSongs(query, offset = (page - 1) * 30))
-                SearchKind.PLAYLIST -> SearchPayload(collections = netease.searchPlaylists(query))
-                SearchKind.ARTIST -> SearchPayload(artists = netease.searchArtists(query))
-                SearchKind.ALBUM -> SearchPayload(collections = netease.searchAlbums(query))
+                SearchKind.PLAYLIST ->
+                    SearchPayload(collections = netease.searchPlaylists(query, offset = (page - 1) * 30))
+
+                SearchKind.ARTIST ->
+                    SearchPayload(artists = netease.searchArtists(query, offset = (page - 1) * 30))
+
+                SearchKind.ALBUM ->
+                    SearchPayload(collections = netease.searchAlbums(query, offset = (page - 1) * 30))
             }
 
             MediaSource.BILIBILI -> SearchPayload(songs = bilibili.searchVideos(query, page))

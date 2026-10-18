@@ -218,6 +218,12 @@ fun rememberRemoteArtwork(url: String?, maxPx: Int = ARTWORK_MAX_PX): ImageBitma
     return state?.takeIf { it.first == key }?.second ?: ArtworkCache.get(key)
 }
 
+/** 远程图片是否已经确定加载失败（用于显示静态占位，而不是一直转圈）。 */
+fun artworkLoadFailed(url: String?, maxPx: Int = ARTWORK_MAX_PX): Boolean {
+    if (url.isNullOrBlank()) return false
+    return ArtworkCache.hasFailed("url|$url|$maxPx")
+}
+
 @Composable
 fun ArtworkBox(
     painter: Painter?,

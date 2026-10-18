@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -100,6 +101,8 @@ class PlayerManager(
     private var currentPlayingKey: String? = null
     private var playbackStartedAt = 0L
     private var sleepTimerJob: Job? = null
+    /** 当前这首歌的「解析地址 + 打开引擎」任务；切歌时取消，避免旧任务把新歌顶掉。 */
+    private var loadJob: Job? = null
     private val resolveMutex = Mutex()
     private val resolvedCache = ConcurrentHashMap<String, AudioInput>()
     private val seedCache = ConcurrentHashMap<String, String>()
@@ -109,6 +112,8 @@ class PlayerManager(
     init {
         engine.onCompleted = { scope.launch { handleTrackCompleted() } }
         engine.onError = { message ->
+            // 解析缓存里可能存着已经过期/不可用的地址，失败后必须丢掉，否则重试永远打同一个 URL
+            _currentSong.value?.key?.let { resolvedCache.remove(it) }
             _state.value = PlaybackState.ERROR
             _buffering.value = false
             scope.launch { _messages.emit(message) }
@@ -298,7 +303,8 @@ class PlayerManager(
                 playCurrent()
             } else {
                 pause()
-                engine.seekTo(0)
+                // 到这里表示队列已经播完：只回到 0，不要再起一个解码进程
+                engine.rewind()
             }
             return
         }
@@ -413,11 +419,16 @@ class PlayerManager(
         _buffering.value = true
         engine.prepare(song.durationMs)
         _lyrics.value = lyricsRepository.cached(song) ?: Lyrics()
+        // 上一次切歌的解析可能还没结束：取消它，否则它会在新歌开始后再把旧歌打开
+        loadJob?.cancel()
         scope.launch { loadLyricsFor(song) }
         scope.launch { updateCoverSeed(song) }
-        scope.launch {
+        loadJob = scope.launch {
             val input = resolveInput(song)
+            // 解析期间用户可能又切歌 / 清空队列 / 停止播放，这里必须重新确认目标仍是当前歌曲
+            if (_currentSong.value?.key != song.key || !isActive) return@launch
             if (input == null) {
+                resolvedCache.remove(song.key)
                 _state.value = PlaybackState.ERROR
                 _buffering.value = false
                 _messages.emit("无法获取播放地址，请稍后重试")

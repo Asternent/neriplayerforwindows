@@ -74,6 +74,7 @@ import moe.ouom.neriplayer.desktop.core.MediaSource
 import moe.ouom.neriplayer.desktop.core.UiScale
 import moe.ouom.neriplayer.desktop.core.displayName
 import moe.ouom.neriplayer.desktop.ui.AccountRow
+import moe.ouom.neriplayer.desktop.ui.colorSwatch
 import moe.ouom.neriplayer.desktop.ui.isWideAppLayout
 import moe.ouom.neriplayer.desktop.ui.EqualizerPresets
 import moe.ouom.neriplayer.desktop.ui.LoginDialog
@@ -230,6 +231,7 @@ fun SettingsScreen(
                                 .size(34.dp)
                                 .clip(CircleShape)
                                 .background(colorFromHex(hex))
+                                .colorSwatch(hex, selected)
                                 .border(
                                     width = if (selected) 3.dp else 1.dp,
                                     color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outlineVariant,
@@ -637,13 +639,14 @@ fun SettingsScreen(
 }
 
 private fun chooseDirectory(): String? = runCatching {
-    runCatching { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
     val chooser = JFileChooser().apply {
         fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
         dialogTitle = "选择音乐文件夹"
         isMultiSelectionEnabled = false
     }
-    if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+    // 指定父窗口：否则对话框可能弹到主窗口后面，看起来像应用卡死
+    val parent = java.awt.Frame.getFrames().firstOrNull { it.isVisible }
+    if (chooser.showOpenDialog(parent) == JFileChooser.APPROVE_OPTION) {
         chooser.selectedFile?.absolutePath
     } else {
         null
