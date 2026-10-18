@@ -78,6 +78,13 @@ object SyncDataSerializer {
 
     fun isBinaryFileName(fileName: String): Boolean = fileName.endsWith(".bin")
 
+    /**
+     * 旧版协议（Base64(GZIP(ProtoBuf))）的编码结果，供自检与兼容性测试使用。
+     * 新版本已经不再写这种格式，但读取路径必须一直保留。
+     */
+    internal fun encodeLegacyBase64(data: SyncData): ByteArray =
+        Base64.getEncoder().encode(gzip(protoBuf.encodeToByteArray(SyncData.serializer(), data)))
+
     private fun gzip(bytes: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
         GZIPOutputStream(out).use { it.write(bytes) }

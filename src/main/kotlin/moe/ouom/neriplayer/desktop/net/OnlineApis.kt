@@ -214,6 +214,9 @@ class NeteaseApi(private val http: HttpService) {
      */
     fun comments(id: String, limit: Int, offset: Int): CommentPage? {
         val root = getJson("/api/v1/resource/comments/R_SO_4_$id?limit=$limit&offset=$offset") ?: return null
+        // 业务码不是 200 时别当成「没有评论」：评论已关闭、需要登录都要说清楚
+        val code = root.int("code") ?: 200
+        if (code != 200) return CommentPage(error = neteaseCommentErrorText(code))
         val hot = root.array("hotComments")?.objects().orEmpty().mapNotNull { neteaseCommentFromJson(JsonObjectSelf(it)) }
         val latest = root.array("comments")?.objects().orEmpty().mapNotNull { neteaseCommentFromJson(JsonObjectSelf(it)) }
         val total = root.long("total")?.toInt() ?: (offset + latest.size)
@@ -221,6 +224,15 @@ class NeteaseApi(private val http: HttpService) {
         // 第一页才有热门评论，且热门往往与最新重复，这里去重后只保留一次
         val hotOnly = if (offset == 0) hot.filter { item -> latest.none { it.id == item.id } } else emptyList()
         return CommentPage(hot = hotOnly, latest = latest, total = total, hasMore = more)
+    }
+
+    /** 网易云评论业务码 → 给用户看的提示。 */
+    private fun neteaseCommentErrorText(code: Int): String = when (code) {
+        301, 315, 401, -460 -> "需要登录网易云才能查看这首歌的评论"
+        403 -> "这首歌的评论区已关闭，或当前账号没有查看权限"
+        404 -> "歌曲不存在，可能已下架"
+        in 500..599 -> "网易云评论服务暂时不可用（HTTP $code）"
+        else -> "网易云评论接口返回异常（code $code）"
     }
 
     /**
@@ -384,6 +396,9 @@ value class JsonObjectSelf(private val raw: kotlinx.serialization.json.JsonObjec
     fun bool(key: String) = raw.bool(key)
     fun obj(key: String) = raw.obj(key)?.let(::JsonObjectSelf)
     fun array(key: String) = raw.array(key)
+
+    /** 对象的全部键（B 站表情表以标记本身作为键）。 */
+    fun keys(): Set<String> = raw.keys
 }
 
 data class SongUrl(
@@ -572,16 +587,40 @@ class BiliApi(private val http: HttpService) {
             headers,
         ) ?: return null
         val root = NeriJsonParser.parse(text).asObject() ?: return null
-        if ((root.int("code") ?: -1) != 0) return null
+        val code = root.int("code") ?: -1
+        if (code != 0) return CommentPage(error = biliCommentErrorText(code))
         val data = root.obj("data")?.let(::JsonObjectSelf)
         val items = data?.array("replies")?.objects().orEmpty()
             .mapNotNull { biliCommentFromJson(JsonObjectSelf(it)) }
         val pageInfo = data?.obj("page")
-        val total = pageInfo?.long("count")?.toInt() ?: items.size
-        val size = pageInfo?.long("size")?.toInt() ?: pageSize
-        val current = pageInfo?.long("num")?.toInt() ?: page
-        val noMoreFromApi = items.isEmpty()
-        return CommentPage(latest = items, total = total, hasMore = !noMoreFromApi && current * size < total)
+        val total = pageInfo?.long("count")?.toInt()?.takeIf { it >= 0 }
+        val size = pageInfo?.long("size")?.toInt()?.takeIf { it > 0 } ?: pageSize
+        // 用「请求的页码」而不是返回的 num 计算进度：匿名访问时接口可能返回 num=0，
+        // 用它会把「还有下一页」算成「已经没有更多」，或者反过来一直翻页。
+        val loadedThrough = (page - 1).toLong() * size + items.size
+        // 明明还有评论却给了空页，说明这次响应被截断（未登录/风控），不能当成到底
+        if (items.isEmpty() && total != null && loadedThrough < total) {
+            return CommentPage(
+                total = total,
+                hasMore = false,
+                error = "哔哩哔哩这次只返回了空页（可能被风控或需要登录），已经加载 $loadedThrough / $total 条",
+            )
+        }
+        val hasMore = total?.let { loadedThrough < it } ?: (items.size >= pageSize)
+        return CommentPage(
+            latest = items,
+            total = total ?: loadedThrough.toInt(),
+            hasMore = hasMore,
+        )
+    }
+
+    /** 哔哩哔哩评论业务码 → 给用户看的提示。 */
+    private fun biliCommentErrorText(code: Int): String = when (code) {
+        -101, -102, -111, -403, -412, 12004 -> "需要登录哔哩哔哩才能查看这条视频的评论"
+        12002, 12061 -> "这条视频的评论区已关闭"
+        -404, 12006 -> "视频不存在，可能已删除或仅限特定用户观看"
+        in 500..599 -> "哔哩哔哩评论服务暂时不可用（HTTP $code）"
+        else -> "哔哩哔哩评论接口返回异常（code $code）"
     }
 
     fun audioUrl(bvid: String, cid: String): String? {

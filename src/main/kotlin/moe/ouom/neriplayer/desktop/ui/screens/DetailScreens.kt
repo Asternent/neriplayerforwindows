@@ -1,6 +1,7 @@
 package moe.ouom.neriplayer.desktop.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,12 +21,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Shuffle
+import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,6 +49,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,6 +64,7 @@ import moe.ouom.neriplayer.desktop.core.StatsPeriod
 import moe.ouom.neriplayer.desktop.core.StatsSort
 import moe.ouom.neriplayer.desktop.ui.EmptyState
 import moe.ouom.neriplayer.desktop.ui.ErrorCard
+import moe.ouom.neriplayer.desktop.ui.LocalCurationDialog
 import moe.ouom.neriplayer.desktop.ui.RemoteArtwork
 import moe.ouom.neriplayer.desktop.ui.SectionHeader
 import moe.ouom.neriplayer.desktop.ui.SongArtwork
@@ -71,6 +77,29 @@ import moe.ouom.neriplayer.desktop.ui.formatPlayCount
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/**
+ * 拖动排序时，根据指针在列表中的纵向位置算出落点行。
+ *
+ * [visibleOffsets] 的 index 是 LazyColumn 的 item 下标（0 是歌单头部），
+ * 所以歌曲下标要减 1；指针超出可见范围时贴到首行/末行。
+ */
+internal fun songIndexAtPointer(
+    pointerY: Float,
+    visibleOffsets: List<Triple<Int, Int, Int>>,
+    songCount: Int,
+): Int {
+    if (songCount <= 0 || visibleOffsets.isEmpty()) return 0
+    val hit = visibleOffsets.firstOrNull { (_, offset, size) ->
+        pointerY >= offset && pointerY < offset + size
+    }
+    val lazyIndex = when {
+        hit != null -> hit.first
+        pointerY < visibleOffsets.first().second -> visibleOffsets.first().first
+        else -> visibleOffsets.last().first
+    }
+    return (lazyIndex - 1).coerceIn(0, songCount - 1)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -182,6 +211,12 @@ fun LocalPlaylistDetailScreen(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val locator = rememberListLocator(listState)
+    // 拖动排序：进入排序模式后按行拖动，松手才真正落库，拖动过程中用高亮提示落点
+    var sortMode by remember(playlistId) { mutableStateOf(false) }
+    var dragFrom by remember { mutableStateOf<Int?>(null) }
+    var dragTo by remember { mutableStateOf<Int?>(null) }
+    var showCuration by remember { mutableStateOf(false) }
+    val accent = MaterialTheme.colorScheme.primary
 
     if (playlist == null) {
         DetailScaffold(title = "歌单", onBack = onBack) {
@@ -190,6 +225,9 @@ fun LocalPlaylistDetailScreen(
         return
     }
     val songs = playlist.songs
+    val localSongs = remember(songs) {
+        songs.filter { it.source == moe.ouom.neriplayer.desktop.core.MediaSource.LOCAL && !it.filePath.isNullOrBlank() }
+    }
 
     DetailScaffold(
         title = playlist.name,
@@ -205,7 +243,28 @@ fun LocalPlaylistDetailScreen(
                     }
                 },
             )
+            if (localSongs.isNotEmpty()) {
+                IconButton(onClick = { showCuration = true }) {
+                    Icon(Icons.Outlined.AutoFixHigh, contentDescription = "批量整理歌词与封面")
+                }
+            }
             if (!playlist.system) {
+                IconButton(
+                    onClick = {
+                        sortMode = !sortMode
+                        dragFrom = null
+                        dragTo = null
+                        showMessage(
+                            if (sortMode) "拖动歌曲即可调整顺序，松手保存" else "已退出拖动排序",
+                        )
+                    },
+                ) {
+                    Icon(
+                        Icons.Outlined.SwapVert,
+                        contentDescription = if (sortMode) "退出拖动排序" else "拖动排序",
+                        tint = if (sortMode) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 IconButton(onClick = { showDeleteConfirm = true }) {
                     Icon(Icons.Outlined.Delete, contentDescription = "删除歌单")
                 }
@@ -243,11 +302,65 @@ fun LocalPlaylistDetailScreen(
                 }
             }
             itemsIndexed(songs, key = { _, song -> song.key }) { index, song ->
+                    val isDropTarget = dragFrom != null && dragTo == index && dragFrom != index
+                    val dragModifier = if (!sortMode) {
+                        Modifier
+                    } else {
+                        Modifier.pointerInput(index, songs.size) {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    dragFrom = index
+                                    dragTo = index
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val info = listState.layoutInfo.visibleItemsInfo
+                                        .firstOrNull { it.index == index }
+                                    val pointerY = (info?.offset ?: 0) + change.position.y
+                                    dragTo = songIndexAtPointer(
+                                        pointerY = pointerY,
+                                        visibleOffsets = listState.layoutInfo.visibleItemsInfo
+                                            .map { Triple(it.index, it.offset, it.size) },
+                                        songCount = songs.size,
+                                    )
+                                },
+                                onDragEnd = {
+                                    val from = dragFrom
+                                    val to = dragTo
+                                    if (from != null && to != null && from != to) {
+                                        container.playlists.reorderSong(playlist.id, from, to)
+                                        showMessage("已移动到第 ${to + 1} 位")
+                                    }
+                                    dragFrom = null
+                                    dragTo = null
+                                },
+                                onDragCancel = {
+                                    dragFrom = null
+                                    dragTo = null
+                                },
+                            )
+                        }
+                    }
+                    val indicatorModifier = if (isDropTarget) {
+                        Modifier.drawBehind {
+                            val stroke = 2.dp.toPx()
+                            drawLine(
+                                color = accent,
+                                start = androidx.compose.ui.geometry.Offset(0f, stroke / 2f),
+                                end = androidx.compose.ui.geometry.Offset(size.width, stroke / 2f),
+                                strokeWidth = stroke,
+                            )
+                        }
+                    } else {
+                        Modifier
+                    }
                     SongRow(
                         song = song,
                         index = index,
-                        onClick = { container.player.playSongNow(song, songs) },
-                        onMore = { actionSong = song },
+                        // 排序模式下点按只用于拖动，别误触播放
+                        onClick = { if (!sortMode) container.player.playSongNow(song, songs) },
+                        onMore = if (sortMode) null else ({ actionSong = song }),
+                        modifier = indicatorModifier.then(dragModifier),
                         isCurrent = song.key == currentSong?.key,
                         isPlaying = playbackState == moe.ouom.neriplayer.desktop.core.PlaybackState.PLAYING,
                         highlightPulse = locator.pulsedSongKey == song.key,
@@ -280,6 +393,15 @@ fun LocalPlaylistDetailScreen(
                 }
             } else null,
             onDismiss = { actionSong = null },
+        )
+    }
+
+    if (showCuration) {
+        LocalCurationDialog(
+            container = container,
+            songs = localSongs,
+            onDismiss = { showCuration = false },
+            showMessage = showMessage,
         )
     }
 

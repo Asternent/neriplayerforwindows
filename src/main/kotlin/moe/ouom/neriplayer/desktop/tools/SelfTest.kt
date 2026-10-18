@@ -206,6 +206,8 @@ fun main() = runBlocking {
     checkFloatingLyrics()
     log("--- 定位到正在播放自检 ---")
     checkLocateCurrent()
+    log("--- 桌面端同步特性自检 ---")
+    checkDesktopSyncFeatures()
     log("--- 下载自检 ---")
     checkDownloads(online)
     log("--- 后台与系统控制自检 ---")
@@ -727,18 +729,25 @@ private fun checkSyncSerializerAndMerge() {
 
     val rawBytes = moe.ouom.neriplayer.desktop.sync.SyncDataSerializer.serialize(payload, useDataSaver = true)
     check(
-        "sync-raw-gzip-magic",
-        rawBytes.size > 2 && rawBytes[0] == 0x1F.toByte() && rawBytes[1] == 0x8B.toByte(),
+        "sync-raw-zstd-magic",
+        rawBytes.size > 4 && rawBytes[0] == 0x28.toByte() && rawBytes[1] == 0xB5.toByte() &&
+            rawBytes[2] == 0x2F.toByte() && rawBytes[3] == 0xFD.toByte(),
         "size=${rawBytes.size} json=${jsonBytes.size}",
     )
     check(
         "sync-raw-roundtrip",
         moe.ouom.neriplayer.desktop.sync.SyncDataSerializer.deserialize(rawBytes) == payload,
     )
-    val legacy = java.util.Base64.getEncoder().encodeToString(rawBytes)
+    check(
+        "sync-raw-smaller-than-json",
+        rawBytes.size < jsonBytes.size,
+        "raw=${rawBytes.size} json=${jsonBytes.size}",
+    )
+    val legacy = moe.ouom.neriplayer.desktop.sync.SyncDataSerializer.encodeLegacyBase64(payload)
     check(
         "sync-legacy-base64-roundtrip",
-        moe.ouom.neriplayer.desktop.sync.SyncDataSerializer.deserialize(legacy.toByteArray()) == payload,
+        moe.ouom.neriplayer.desktop.sync.SyncDataSerializer.deserialize(legacy) == payload,
+        "legacy=${legacy.size}",
     )
 
     // 合并：歌单按 modifiedAt 取新 + 歌曲取并集
@@ -824,6 +833,173 @@ private fun checkSyncSerializerAndMerge() {
     check("sync-merge-deletion-tombstone", afterDeletion.size == 1 && afterDeletion.first().id == songA.id)
 
     checkArtworkDownscale()
+}
+
+/**
+ * 本轮同步新增的纯逻辑检查：翻译容差、评论富媒体、悬浮歌词换行、
+ * 拖动落点、批量整理与 WebDAV 条件写。
+ */
+private fun checkDesktopSyncFeatures() {
+    // 1. 翻译容差匹配：差几十毫秒要能对上，差太多不能硬塞
+    val base = listOf(
+        moe.ouom.neriplayer.desktop.core.LyricLine(1_000, "第一句"),
+        moe.ouom.neriplayer.desktop.core.LyricLine(3_000, "第二句"),
+        moe.ouom.neriplayer.desktop.core.LyricLine(5_000, "第三句"),
+    )
+    val translated = listOf(
+        moe.ouom.neriplayer.desktop.core.LyricLine(1_080, "first"),
+        moe.ouom.neriplayer.desktop.core.LyricLine(2_900, "second"),
+        moe.ouom.neriplayer.desktop.core.LyricLine(5_800, "too far"),
+    )
+    val merged = LrcParser.merge(base, translated)
+    check("lyric-align-near", merged[0].translation == "first", "${merged[0].translation}")
+    check("lyric-align-slight-early", merged[1].translation == "second", "${merged[1].translation}")
+    check("lyric-align-out-of-tolerance", merged[2].translation == null, "${merged[2].translation}")
+
+    // 2. 制作信息行不参与对齐，译文要向下贴到正文行
+    val creditMerged = LrcParser.merge(
+        listOf(
+            moe.ouom.neriplayer.desktop.core.LyricLine(0, "作词: 某人"),
+            moe.ouom.neriplayer.desktop.core.LyricLine(0, "正文第一句"),
+            moe.ouom.neriplayer.desktop.core.LyricLine(3_000, "正文第二句"),
+        ),
+        listOf(
+            moe.ouom.neriplayer.desktop.core.LyricLine(0, "作词: 某某"),
+            moe.ouom.neriplayer.desktop.core.LyricLine(0, "line one"),
+            moe.ouom.neriplayer.desktop.core.LyricLine(3_000, "line two"),
+        ),
+    )
+    check("lyric-credit-line-skipped", creditMerged[0].translation == null, "${creditMerged[0].translation}")
+    check("lyric-credit-aligns-body", creditMerged[1].translation == "line one", "${creditMerged[1].translation}")
+    check("lyric-credit-next-body", creditMerged[2].translation == "line two", "${creditMerged[2].translation}")
+
+    // 3. 未翻译占位「//」不算翻译
+    val placeholder = LrcParser.merge(
+        listOf(moe.ouom.neriplayer.desktop.core.LyricLine(0, "text")),
+        listOf(moe.ouom.neriplayer.desktop.core.LyricLine(0, "//")),
+    )
+    check("lyric-placeholder-ignored", placeholder[0].translation == null, "${placeholder[0].translation}")
+
+    // 4. 评论：网易云表情 / 等级 / 引用 / 楼中楼
+    val neteaseObject = moe.ouom.neriplayer.desktop.net.NeriJsonParser.parse(
+        """{"commentId":11,"content":"好听[大笑]","likedCount":7,"time":1700000000000,
+            "user":{"nickname":"甲","avatarUrl":"http://p1.music.126.net/a.jpg","level":6},
+            "showFloorComment":{"replyCount":3,"comments":[{"commentId":12,"content":"回复一","user":{"nickname":"乙"}}]},
+            "beReplied":[{"content":"被引用的原文","user":{"nickname":"丙"}}]}""",
+    ).asObject()
+    val neteaseComment = neteaseObject?.let {
+        moe.ouom.neriplayer.desktop.net.neteaseCommentFromJson(moe.ouom.neriplayer.desktop.net.JsonObjectSelf(it))
+    }
+    check(
+        "comment-netease-emote",
+        neteaseComment?.emotes?.singleOrNull()?.url?.contains("emoji_86") == true,
+        "${neteaseComment?.emotes}",
+    )
+    check("comment-netease-level", neteaseComment?.userLevel == 6, "${neteaseComment?.userLevel}")
+    check("comment-netease-quote", neteaseComment?.quote?.content == "被引用的原文", "${neteaseComment?.quote}")
+    check(
+        "comment-netease-floor",
+        neteaseComment?.replyCount == 3 && neteaseComment?.replies?.size == 1,
+        "count=${neteaseComment?.replyCount} preview=${neteaseComment?.replies?.size}",
+    )
+
+    // 5. 评论：B 站表情 / 配图 / 头像协议 / 秒级时间戳
+    val biliObject = moe.ouom.neriplayer.desktop.net.NeriJsonParser.parse(
+        """{"rpid":21,"content":{"message":"看图[doge]",
+            "emote":{"[doge]":{"url":"//i0.hdslb.com/e.png"}},
+            "pictures":[{"img_src":"//i0.hdslb.com/a.jpg","img_width":1200,"img_height":800}]},
+            "member":{"uname":"丁","avatar":"//i0.hdslb.com/u.jpg","level_info":{"current_level":4}},
+            "ctime":1700000000,"like":9}""",
+    ).asObject()
+    val biliComment = biliObject?.let {
+        moe.ouom.neriplayer.desktop.net.biliCommentFromJson(moe.ouom.neriplayer.desktop.net.JsonObjectSelf(it))
+    }
+    check("comment-bili-emote", biliComment?.emotes?.singleOrNull()?.url == "https://i0.hdslb.com/e.png", "${biliComment?.emotes}")
+    check("comment-bili-image", biliComment?.images?.singleOrNull()?.url == "https://i0.hdslb.com/a.jpg", "${biliComment?.images}")
+    check("comment-bili-image-ratio", biliComment?.images?.firstOrNull()?.aspectRatio == 1.5f, "${biliComment?.images?.firstOrNull()?.aspectRatio}")
+    check("comment-bili-avatar-scheme", biliComment?.avatarUrl?.startsWith("https://") == true, "${biliComment?.avatarUrl}")
+    check("comment-bili-time", biliComment?.timeMs == 1_700_000_000_000L, "${biliComment?.timeMs}")
+
+    // 6. 正文切分：文本与内联表情按出现顺序交错
+    val segments = moe.ouom.neriplayer.desktop.net.splitCommentContent(
+        "前[大笑]后[大笑]",
+        moe.ouom.neriplayer.desktop.net.neteaseEmotesIn("前[大笑]后[大笑]"),
+    )
+    check("comment-split-count", segments.size == 4, "segments=${segments.size}")
+    check(
+        "comment-split-order",
+        (segments.getOrNull(0) as? moe.ouom.neriplayer.desktop.net.CommentSegment.Text)?.text == "前" &&
+            segments.getOrNull(1) is moe.ouom.neriplayer.desktop.net.CommentSegment.Emote &&
+            (segments.getOrNull(2) as? moe.ouom.neriplayer.desktop.net.CommentSegment.Text)?.text == "后",
+        "$segments",
+    )
+
+    // 7. 悬浮歌词：句数归一化、长句模式、窗口高度
+    val compactHeight = moe.ouom.neriplayer.desktop.ui.floatingWindowHeightDp(
+        moe.ouom.neriplayer.desktop.core.AppSettings(),
+    )
+    val threeLines = moe.ouom.neriplayer.desktop.ui.floatingWindowHeightDp(
+        moe.ouom.neriplayer.desktop.core.AppSettings(floatingLyricsSentenceCount = 3),
+    )
+    val wrapped = moe.ouom.neriplayer.desktop.ui.floatingWindowHeightDp(
+        moe.ouom.neriplayer.desktop.core.AppSettings(floatingLyricsLongLineMode = "wrap"),
+    )
+    check(
+        "floating-sentence-clamp",
+        moe.ouom.neriplayer.desktop.ui.normalizeFloatingSentenceCount(0) == 1 &&
+            moe.ouom.neriplayer.desktop.ui.normalizeFloatingSentenceCount(9) == 3,
+    )
+    check(
+        "floating-long-mode",
+        moe.ouom.neriplayer.desktop.ui.normalizeFloatingLongLineMode(" WRAP ") == "wrap" &&
+            moe.ouom.neriplayer.desktop.ui.normalizeFloatingLongLineMode("bogus") == "scroll",
+    )
+    check("floating-height-preview", threeLines > compactHeight, "$compactHeight -> $threeLines")
+    check("floating-height-wrap", wrapped > compactHeight, "$compactHeight -> $wrapped")
+
+    // 8. 拖动排序落点换算（item 0 是歌单头部）
+    val visible = listOf(
+        Triple(0, 0, 120),
+        Triple(1, 120, 64),
+        Triple(2, 184, 64),
+        Triple(3, 248, 64),
+    )
+    check(
+        "drag-target-second-song",
+        moe.ouom.neriplayer.desktop.ui.screens.songIndexAtPointer(200f, visible, 5) == 1,
+        "${moe.ouom.neriplayer.desktop.ui.screens.songIndexAtPointer(200f, visible, 5)}",
+    )
+    check("drag-target-top", moe.ouom.neriplayer.desktop.ui.screens.songIndexAtPointer(-10f, visible, 5) == 0)
+    check("drag-target-tail", moe.ouom.neriplayer.desktop.ui.screens.songIndexAtPointer(9_000f, visible, 5) == 2)
+
+    // 9. 批量整理：时长容差与状态文案
+    check(
+        "curation-duration-tolerance",
+        moe.ouom.neriplayer.desktop.core.LocalCurationService.durationToleranceMs(200_000) == 12_000L &&
+            moe.ouom.neriplayer.desktop.core.LocalCurationService.durationToleranceMs(1_000) == 7_000L &&
+            moe.ouom.neriplayer.desktop.core.LocalCurationService.durationToleranceMs(400_000) == 15_000L,
+    )
+    val readyItem = moe.ouom.neriplayer.desktop.core.CurationItem(
+        song = Song(key = "local:a", source = MediaSource.LOCAL, title = "A"),
+        phase = moe.ouom.neriplayer.desktop.core.CurationPhase.READY,
+        lyric = "x",
+        coverUrl = "y",
+    )
+    check("curation-status-text", readyItem.statusText.contains("歌词") && readyItem.statusText.contains("封面"), readyItem.statusText)
+
+    // 10. WebDAV 条件写：弱 ETag 不能用于 If-Match
+    check(
+        "webdav-strong-etag",
+        moe.ouom.neriplayer.desktop.sync.WebDavSyncTransport.strongETag("\"abc\"") == "\"abc\"" &&
+            moe.ouom.neriplayer.desktop.sync.WebDavSyncTransport.strongETag("W/\"abc\"").isEmpty(),
+    )
+    check(
+        "webdav-content-compare",
+        moe.ouom.neriplayer.desktop.sync.WebDavSyncTransport.sameContent(byteArrayOf(1, 2, 3), byteArrayOf(1, 2, 3)) &&
+            !moe.ouom.neriplayer.desktop.sync.WebDavSyncTransport.sameContent(byteArrayOf(1), byteArrayOf(2)),
+    )
+
+    log("desktop sync checks done")
 }
 
 /**

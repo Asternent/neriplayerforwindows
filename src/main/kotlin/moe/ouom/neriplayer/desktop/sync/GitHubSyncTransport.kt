@@ -22,6 +22,8 @@ data class RemoteSyncFile(
     val content: ByteArray,
     val headSha: String,
     val path: String,
+    /** WebDAV 的 `Last-Modified`：服务端只给弱 ETag 时用它做条件写。 */
+    val lastModified: String = "",
 )
 
 /**

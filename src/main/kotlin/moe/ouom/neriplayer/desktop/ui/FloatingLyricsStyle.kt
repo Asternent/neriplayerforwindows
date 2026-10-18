@@ -122,13 +122,37 @@ fun resolveDragPosition(
     return targetX.coerceIn(0, maxX) to targetY.coerceIn(0, maxY)
 }
 
-/** 悬浮窗高度：主歌词 + 可选翻译 + 内边距。 */
+/** 悬浮歌词长句处理：滚动（跑马灯）或换行。 */
+const val FLOATING_LYRICS_LONG_LINE_SCROLL = "scroll"
+const val FLOATING_LYRICS_LONG_LINE_WRAP = "wrap"
+
+/** 同时显示几句，限制在 1..3（与手机端一致）。 */
+fun normalizeFloatingSentenceCount(value: Int): Int = value.coerceIn(1, 3)
+
+/** 长句模式归一化：未知值一律回落到滚动。 */
+fun normalizeFloatingLongLineMode(value: String?): String =
+    if (value?.trim()?.lowercase() == FLOATING_LYRICS_LONG_LINE_WRAP) {
+        FLOATING_LYRICS_LONG_LINE_WRAP
+    } else {
+        FLOATING_LYRICS_LONG_LINE_SCROLL
+    }
+
+/** 当前设置是否按长句换行显示。 */
+fun AppSettings.wrapFloatingLongLine(): Boolean =
+    normalizeFloatingLongLineMode(floatingLyricsLongLineMode) == FLOATING_LYRICS_LONG_LINE_WRAP
+
+/** 悬浮窗高度：主歌词（换行时最多 3 行）+ 可选翻译 + 后续歌词 + 内边距。 */
 fun floatingWindowHeightDp(settings: AppSettings): Float {
-    val lineHeight = settings.floatingLyricsFontSize * 1.6f
+    val fontSize = settings.floatingLyricsFontSize
+    val lineHeight = fontSize * 1.6f
     val translation = if (settings.floatingLyricsShowTranslation) {
-        settings.floatingLyricsFontSize * 1.35f
+        fontSize * 1.35f
     } else {
         0f
     }
-    return (lineHeight + translation + 28f).coerceAtLeast(64f)
+    // 换行模式下当前句可能占满 3 行
+    val wrapExtra = if (settings.wrapFloatingLongLine()) lineHeight * 2f else 0f
+    val previewCount = normalizeFloatingSentenceCount(settings.floatingLyricsSentenceCount) - 1
+    val previewRows = previewCount.coerceAtLeast(0) * fontSize * 1.35f
+    return (lineHeight + translation + wrapExtra + previewRows + 28f).coerceAtLeast(64f)
 }

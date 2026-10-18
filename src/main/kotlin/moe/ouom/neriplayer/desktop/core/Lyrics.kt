@@ -61,7 +61,9 @@ object LrcParser {
     /**
      * 把翻译与音译按时间戳合并进主歌词。
      *
-     * 翻译与音译都允许为空；同一时间戳上只取第一条，避免重复行互相覆盖。
+     * 不要求时间戳完全相等：不同平台导出的翻译经常比原文早十几毫秒，
+     * 严格相等会让整首歌的翻译全部丢失。这里按「最近的仍在容差内的行」匹配，
+     * 规则与手机端一致（见 [matchSecondaryLines]）。
      */
     fun merge(
         base: List<LyricLine>,
@@ -69,24 +71,95 @@ object LrcParser {
         romanized: List<LyricLine> = emptyList(),
     ): List<LyricLine> {
         if (translated.isEmpty() && romanized.isEmpty()) return base
-        val translationByTime = indexByTime(translated)
-        val romanizationByTime = indexByTime(romanized)
-        return base.map { line ->
-            val translation = translationByTime[line.timeMs]
+        val translationMatches = matchSecondaryLines(base, translated)
+        val romanizationMatches = matchSecondaryLines(base, romanized)
+        return base.mapIndexed { index, line ->
+            val translation = translationMatches[index]
                 ?.takeIf { it.isNotBlank() && it != line.text }
-            val romanization = romanizationByTime[line.timeMs]
+            val romanization = romanizationMatches[index]
                 ?.takeIf { it.isNotBlank() && it != line.text && it != translation }
             line.copy(translation = translation, romanization = romanization)
         }
     }
 
-    private fun indexByTime(lines: List<LyricLine>): Map<Long, String> {
-        if (lines.isEmpty()) return emptyMap()
-        val result = LinkedHashMap<Long, String>()
-        lines.forEach { line ->
-            if (line.text.isNotBlank()) result.putIfAbsent(line.timeMs, line.text)
+    /**
+     * 把翻译/音译行按时间对到主歌词的行下标上。
+     *
+     * 关键点（对齐手机端 LyricTranslationMatcher）：
+     * 1. 容差匹配：译文时间戳落在原行区间内，或与行首相差不超过
+     *    [LYRIC_ALIGN_TOLERANCE_MS]，且比下一行更近，就算命中；
+     * 2. 提前量兜底：译文比原行早，但不早于 [LYRIC_LOOSE_TOLERANCE_MS]，同样接受；
+     * 3. 向下对齐：一行时间戳上常常同时挂着「作词: xxx」「OP: xxx」等制作信息行，
+     *    译文要落到这一组里靠后的正文行上，否则整段翻译会错位一行；
+     * 4. 制作信息行本身不是翻译，「/」这种未翻译占位也不算。
+     */
+    internal fun matchSecondaryLines(
+        base: List<LyricLine>,
+        secondary: List<LyricLine>,
+    ): Map<Int, String> {
+        if (base.isEmpty() || secondary.isEmpty()) return emptyMap()
+        val candidates = secondary.filter {
+            it.text.isNotBlank() &&
+                !isLyricCreditMetadataLine(it.text) &&
+                !isUntranslatedPlaceholderText(it.text)
+        }
+        if (candidates.isEmpty()) return emptyMap()
+
+        val result = LinkedHashMap<Int, String>()
+        var candidateIndex = 0
+        var lineIndex = 0
+
+        while (lineIndex < base.size) {
+            val groupStart = base[lineIndex].timeMs
+            var groupEnd = lineIndex
+            while (groupEnd < base.size && base[groupEnd].timeMs == groupStart) groupEnd++
+            val groupSize = groupEnd - lineIndex
+            val representative = base[groupEnd - 1]
+            val nextStart = base.getOrNull(groupEnd)?.timeMs
+
+            val assigned = ArrayList<String>(groupSize)
+            while (candidateIndex < candidates.size && assigned.size < groupSize) {
+                val candidate = candidates[candidateIndex]
+                // 远早于当前行、且已经错过容纳窗口的译文，直接丢掉
+                if (candidate.timeMs < groupStart - LYRIC_LOOSE_TOLERANCE_MS) {
+                    candidateIndex++
+                    continue
+                }
+                val distance = distanceToLine(candidate.timeMs, representative.timeMs, nextStart)
+                val nextDistance = nextStart?.let { distanceToLine(candidate.timeMs, it, null) } ?: Long.MAX_VALUE
+                val withinTolerance = distance <= LYRIC_ALIGN_TOLERANCE_MS && distance <= nextDistance
+                val slightlyAhead = candidate.timeMs < representative.timeMs &&
+                    distance <= LYRIC_LOOSE_TOLERANCE_MS &&
+                    distance <= nextDistance
+                if (withinTolerance || slightlyAhead) {
+                    assigned += candidate.text
+                    candidateIndex++
+                } else {
+                    break
+                }
+            }
+
+            // 向下对齐：译文放到这一组靠后的行，跳过制作信息行
+            val firstTarget = groupEnd - assigned.size
+            assigned.forEachIndexed { offset, text ->
+                val target = firstTarget + offset
+                if (target in base.indices && !isLyricCreditMetadataLine(base[target].text)) {
+                    result[target] = text
+                }
+            }
+            lineIndex = groupEnd
         }
         return result
+    }
+
+    /** 译文时间戳到某行播放区间的距离：落在区间内记 0。 */
+    private fun distanceToLine(timestampMs: Long, lineStartMs: Long, nextStartMs: Long?): Long {
+        val endExclusive = if (nextStartMs != null && nextStartMs > lineStartMs) nextStartMs else lineStartMs + 1
+        return when {
+            timestampMs < lineStartMs -> lineStartMs - timestampMs
+            timestampMs >= endExclusive -> timestampMs - endExclusive + 1
+            else -> 0L
+        }
     }
 
     /** 同一文件内同时包含原文与翻译（相同时间戳连写两行）时拆分为翻译。 */
@@ -107,6 +180,42 @@ object LrcParser {
         }
         return main.sortedBy { it.timeMs } to translation.sortedBy { it.timeMs }
     }
+}
+
+/** 译文与原文行首的对齐容差：超过这个距离就不再认为它们属于同一句。 */
+internal const val LYRIC_ALIGN_TOLERANCE_MS = 450L
+
+/** 译文比原文更早时仍可接受的最大提前量。 */
+internal const val LYRIC_LOOSE_TOLERANCE_MS = 2_000L
+
+private val lyricCreditRegex = Regex("""^\s*([\p{L}·]{1,12})\s*[:：]\s*\S""")
+
+/**
+ * 常见的「制作信息」角色词。这些行挂在和正文相同的时间戳上，
+ * 但它们不是翻译，参与对齐会让整段歌词错位。
+ */
+private val lyricCreditRoles = setOf(
+    "作词", "作詞", "作曲", "编曲", "編曲", "谱曲", "譜曲", "制作人", "製作人", "制作", "製作",
+    "出品", "出品人", "联合出品", "聯合出品", "营销", "營銷", "企划", "企劃", "策划", "策劃",
+    "监制", "監製", "统筹", "統籌", "发行", "發行", "混音", "母带", "母帶", "录音", "錄音",
+    "和声", "和聲", "和音", "配唱", "演唱", "原唱", "词", "詞", "曲", "吉他", "贝斯", "貝斯",
+    "鼓", "键盘", "鍵盤", "弦乐", "弦樂", "录音师", "錄音師", "混音师", "混音師",
+    "制作公司", "製作公司", "版权", "版權", "鸣谢", "鳴謝", "特别鸣谢", "特別鳴謝",
+    "op", "sp", "lyricist", "composer", "arranger", "producer", "mixing",
+    "mastering", "recording", "vocal", "guitar", "bass", "drums", "keyboard",
+    "strings",
+)
+
+/** 这一行是不是「作词: xxx」这类制作信息。 */
+internal fun isLyricCreditMetadataLine(text: String): Boolean {
+    val role = lyricCreditRegex.find(text)?.groupValues?.getOrNull(1)?.trim()?.lowercase() ?: return false
+    return role in lyricCreditRoles
+}
+
+/** 这一行是不是「/」「//」这种未翻译占位。 */
+internal fun isUntranslatedPlaceholderText(text: String): Boolean {
+    val normalized = text.replace('／', '/').filterNot(Char::isWhitespace)
+    return normalized.length >= 2 && normalized.all { it == '/' }
 }
 
 /**

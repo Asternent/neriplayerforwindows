@@ -192,6 +192,10 @@ data class AppSettings(
     val floatingLyricsBackgroundColor: String = "BLACK",
     val floatingLyricsShowTranslation: Boolean = true,
     val floatingLyricsRevealAnimation: Boolean = true,
+    /** 同时显示几句：1 = 只看当前句，2/3 = 再带出后面一两句。 */
+    val floatingLyricsSentenceCount: Int = 1,
+    /** 长句处理：scroll（跑马灯）或 wrap（换行，最多 3 行）。 */
+    val floatingLyricsLongLineMode: String = "scroll",
     val floatingLyricsMaxWidthDp: Float = 900f,
     /** LEFT / CENTER / RIGHT */
     val floatingLyricsAlignment: String = "CENTER",

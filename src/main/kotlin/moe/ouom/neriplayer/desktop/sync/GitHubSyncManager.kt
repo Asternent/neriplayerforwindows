@@ -107,7 +107,14 @@ class GitHubSyncManager(
             if (remoteFile == null || remote == null || isEmptyData(remote)) {
                 val payload = prepareUpload(local, cfg)
                 val result = if (wdTransport != null) {
-                    wdTransport.writeSyncFile(payload, remoteFile?.headSha, "NeriPlayer 桌面端初始同步", cfg.useDataSaver)
+                    wdTransport.writeSyncFile(
+                        content = payload,
+                        expectedHead = remoteFile?.headSha,
+                        expectedLastModified = remoteFile?.lastModified.orEmpty(),
+                        message = "NeriPlayer 桌面端初始同步",
+                        useDataSaver = cfg.useDataSaver,
+                        createOnly = remoteFile == null,
+                    )
                 } else {
                     ghTransport!!.writeSyncFile(cfg.owner, cfg.repo, payload, remoteFile?.headSha, "NeriPlayer 桌面端初始同步", cfg.useDataSaver)
                 }
@@ -134,7 +141,13 @@ class GitHubSyncManager(
             }
             val payload = prepareUpload(merged, cfg)
             val result = if (wdTransport != null) {
-                wdTransport.writeSyncFile(payload, remoteFile.headSha, "NeriPlayer 桌面端同步 ${LocalDate.now()}", cfg.useDataSaver)
+                wdTransport.writeSyncFile(
+                    content = payload,
+                    expectedHead = remoteFile.headSha,
+                    expectedLastModified = remoteFile.lastModified,
+                    message = "NeriPlayer 桌面端同步 ${LocalDate.now()}",
+                    useDataSaver = cfg.useDataSaver,
+                )
             } else {
                 ghTransport!!.writeSyncFile(cfg.owner, cfg.repo, payload, remoteFile.headSha, "NeriPlayer 桌面端同步 ${LocalDate.now()}", cfg.useDataSaver)
             }

@@ -203,6 +203,18 @@ fun FloatingLyricsWindow(
             else -> "♪"
         }
     val translationText = currentLine?.translation?.takeIf { it.isNotBlank() }
+    val sentenceCount = normalizeFloatingSentenceCount(settings.floatingLyricsSentenceCount)
+    val wrapLongLine = settings.wrapFloatingLongLine()
+    // 后续几句只做「预览」：不参与高亮，透明度更低，用于提前看清下一句
+    val upcomingLines = remember(lyrics, currentLineIndex, sentenceCount) {
+        if (sentenceCount <= 1 || currentLineIndex < 0) {
+            emptyList()
+        } else {
+            lyrics.lines.drop(currentLineIndex + 1)
+                .filter { it.text.isNotBlank() }
+                .take(sentenceCount - 1)
+        }
+    }
     val alignment = settings.alignment()
     val isPlaying = playbackState == PlaybackState.PLAYING
 
@@ -345,6 +357,7 @@ fun FloatingLyricsWindow(
                     alpha = settings.floatingLyricsLyricAlpha,
                     bold = true,
                     animateReveal = settings.floatingLyricsRevealAnimation,
+                    wrap = wrapLongLine,
                 )
                 if (settings.floatingLyricsShowTranslation && !translationText.isNullOrBlank()) {
                     Spacer(Modifier.size(2.dp))
@@ -355,6 +368,19 @@ fun FloatingLyricsWindow(
                         alpha = settings.floatingLyricsTranslationAlpha,
                         bold = false,
                         animateReveal = settings.floatingLyricsRevealAnimation,
+                        wrap = wrapLongLine,
+                    )
+                }
+                // 后面一两句淡一些地跟在下面（与手机端一致的 0.55 倍透明度）
+                upcomingLines.forEach { line ->
+                    Spacer(Modifier.size(2.dp))
+                    FloatingLyricLine(
+                        text = line.text,
+                        settings = settings,
+                        fontSizeSp = settings.floatingLyricsFontSize * 0.85f,
+                        alpha = settings.floatingLyricsLyricAlpha * 0.55f,
+                        bold = false,
+                        animateReveal = false,
                     )
                 }
             }
@@ -395,7 +421,7 @@ private fun FloatingControl(
     }
 }
 
-/** 单行歌词：按设置渲染阴影或描边，并处理超长歌词的滚动。 */
+/** 单行歌词：按设置渲染阴影或描边，并处理超长歌词的滚动（或换行）。 */
 @Composable
 internal fun FloatingLyricLine(
     text: String,
@@ -404,6 +430,7 @@ internal fun FloatingLyricLine(
     alpha: Float,
     bold: Boolean,
     animateReveal: Boolean,
+    wrap: Boolean = false,
 ) {
     val reveal = remember { Animatable(if (animateReveal) 0f else 1f) }
     LaunchedEffect(text, animateReveal) {
@@ -422,11 +449,18 @@ internal fun FloatingLyricLine(
         fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
         textAlign = align,
     )
+    val lineModifier = if (wrap) {
+        Modifier.fillMaxWidth()
+    } else {
+        Modifier
+            .fillMaxWidth()
+            .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1500)
+    }
+    val overflow = if (wrap) TextOverflow.Ellipsis else TextOverflow.Visible
+    val maxLines = if (wrap) 3 else 1
 
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = 1500),
+        modifier = lineModifier,
         contentAlignment = when (align) {
             TextAlign.Start -> Alignment.CenterStart
             TextAlign.End -> Alignment.CenterEnd
@@ -437,9 +471,9 @@ internal fun FloatingLyricLine(
             FloatingLyricRenderStyle.SHADOW -> {
                 Text(
                     text = text,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Visible,
+                    maxLines = maxLines,
+                    softWrap = wrap,
+                    overflow = overflow,
                     style = baseStyle.copy(
                         color = textColor,
                         shadow = Shadow(
@@ -454,9 +488,9 @@ internal fun FloatingLyricLine(
             FloatingLyricRenderStyle.OUTLINE -> {
                 Text(
                     text = text,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Visible,
+                    maxLines = maxLines,
+                    softWrap = wrap,
+                    overflow = overflow,
                     style = baseStyle.copy(
                         color = settings.outlineColor().copy(alpha = effectiveAlpha),
                         drawStyle = Stroke(width = settings.floatingLyricsOutlineWidth),
@@ -464,9 +498,9 @@ internal fun FloatingLyricLine(
                 )
                 Text(
                     text = text,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Visible,
+                    maxLines = maxLines,
+                    softWrap = wrap,
+                    overflow = overflow,
                     style = baseStyle.copy(color = textColor),
                 )
             }
@@ -477,6 +511,9 @@ internal fun FloatingLyricLine(
 /** 设置页里的悬浮效果预览（与真实悬浮窗使用同一套渲染）。 */
 @Composable
 fun FloatingLyricsPreview(settings: AppSettings) {
+    val wrap = settings.wrapFloatingLongLine()
+    val sentenceCount = normalizeFloatingSentenceCount(settings.floatingLyricsSentenceCount)
+    val upcomingSamples = listOf("下一句歌词会淡一些地跟在下面", "再下一句同样只作预览")
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -503,6 +540,7 @@ fun FloatingLyricsPreview(settings: AppSettings) {
                 alpha = settings.floatingLyricsLyricAlpha,
                 bold = true,
                 animateReveal = false,
+                wrap = wrap,
             )
             if (settings.floatingLyricsShowTranslation) {
                 FloatingLyricLine(
@@ -510,6 +548,17 @@ fun FloatingLyricsPreview(settings: AppSettings) {
                     settings = settings,
                     fontSizeSp = settings.floatingLyricsFontSize * 0.55f,
                     alpha = settings.floatingLyricsTranslationAlpha,
+                    bold = false,
+                    animateReveal = false,
+                    wrap = wrap,
+                )
+            }
+            upcomingSamples.take((sentenceCount - 1).coerceAtLeast(0)).forEach { sample ->
+                FloatingLyricLine(
+                    text = sample,
+                    settings = settings,
+                    fontSizeSp = settings.floatingLyricsFontSize * 0.6f,
+                    alpha = settings.floatingLyricsLyricAlpha * 0.55f,
                     bold = false,
                     animateReveal = false,
                 )

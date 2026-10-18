@@ -96,6 +96,37 @@ fun FloatingLyricsSettingsSection(
             )
 
             Spacer(Modifier.height(8.dp))
+            OptionLabel("同时显示")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                (1..3).forEach { count ->
+                    FilterChip(
+                        selected = normalizeFloatingSentenceCount(settings.floatingLyricsSentenceCount) == count,
+                        onClick = { container.settings.update { it.copy(floatingLyricsSentenceCount = count) } },
+                        label = { Text(if (count == 1) "只显示当前句" else "$count 句") },
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            OptionLabel("长句处理")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = !settings.wrapFloatingLongLine(),
+                    onClick = {
+                        container.settings.update { it.copy(floatingLyricsLongLineMode = FLOATING_LYRICS_LONG_LINE_SCROLL) }
+                    },
+                    label = { Text("滚动") },
+                )
+                FilterChip(
+                    selected = settings.wrapFloatingLongLine(),
+                    onClick = {
+                        container.settings.update { it.copy(floatingLyricsLongLineMode = FLOATING_LYRICS_LONG_LINE_WRAP) }
+                    },
+                    label = { Text("换行（最多 3 行）") },
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
             OptionLabel("渲染方式")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FloatingLyricRenderStyle.entries.forEach { style ->
