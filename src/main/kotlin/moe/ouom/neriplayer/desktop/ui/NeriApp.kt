@@ -46,6 +46,12 @@ import moe.ouom.neriplayer.desktop.tools.runUiScript
 
 @Composable
 fun NeriApp(container: AppContainer) {
+    moe.ouom.neriplayer.desktop.core.BootClock.mark("neri-app")
+    // 第一帧真正画出来的时间：窗口创建（Skiko/GL 初始化）与首次排版都算在里面
+    LaunchedEffect(Unit) {
+        androidx.compose.runtime.withFrameNanos { }
+        moe.ouom.neriplayer.desktop.core.BootClock.mark("first-frame")
+    }
     // 窗口够宽（横屏 / 最大化）时切换到横屏排版：内容铺满窗口，多栏消化横向空间
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val layoutMode = if (maxWidth >= AppWideBreakpoint) AppLayoutMode.WIDE else AppLayoutMode.COMPACT
@@ -90,6 +96,7 @@ fun NeriThemeForSettings(
 
 @Composable
 private fun AppScaffold(container: AppContainer) {
+    moe.ouom.neriplayer.desktop.core.BootClock.mark("scaffold")
     val backStack = remember { mutableStateListOf<Screen>(Screen.Tab(MainTab.HOME)) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()

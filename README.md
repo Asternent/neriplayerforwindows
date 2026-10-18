@@ -39,9 +39,9 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 
 | 文件 | 说明 |
 | --- | --- |
-| `NeriPlayer-1.10.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
-| `NeriPlayer-1.10.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.10.0.msi` |
-| `NeriPlayer-1.10.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
+| `NeriPlayer-1.11.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
+| `NeriPlayer-1.11.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.11.0.msi` |
+| `NeriPlayer-1.11.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
 
 安装完成后从开始菜单启动「NeriPlayer」。
 
@@ -407,8 +407,8 @@ Windows 把「漫游配置」和「本机数据」分成两棵树，本应用同
 ```powershell
 gradlew run                    # 直接运行
 gradlew createDistributable    # 免安装应用目录：build\compose\binaries\main\app\NeriPlayer\
-gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.10.0.msi
-gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.10.0.exe
+gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.11.0.msi
+gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.11.0.exe
 ```
 
 - `gradlew` 是批处理包装脚本，在 CMD / PowerShell 里直接写 `gradlew`（或 `.\gradlew.bat`）；
@@ -497,7 +497,7 @@ Windows 默认会把新出现的图标收进**溢出区**：点任务栏上的 `
 Android 版请用 [cwuom/NeriPlayer](https://github.com/cwuom/NeriPlayer)。
 
 **升级新版本会不会丢设置和曲库？**
-不会（1.10.0 起）。设置、账号在 `%APPDATA%\NeriPlayer`，曲库、歌单、历史与统计在
+不会（1.11.0 起）。设置、账号在 `%APPDATA%\NeriPlayer`，曲库、歌单、历史与统计在
 `%LOCALAPPDATA%\NeriPlayerData`，两者都在安装目录之外；MSI 使用固定的 `upgradeUuid`，覆盖升级即可。
 免安装版只要换掉程序目录，数据同样保留。
 
@@ -532,7 +532,7 @@ Android 版请用 [cwuom/NeriPlayer](https://github.com/cwuom/NeriPlayer)。
 | 语言 / 运行时 | Kotlin 2.4.0（JVM toolchain 17），打包内置 jlink 运行时 |
 | 界面 | JetBrains Compose Multiplatform（Compose Desktop）1.11.1，Material 3，Skia 渲染 |
 | 主题取色 | material-color-utilities（materialkolor）3.0.1 —— 动态取色与 9 种调色风格 |
-| 序列化 / 协程 | kotlinx-serialization 1.7.3（JSON + Protobuf，用于同步省流通道）、kotlinx-coroutines-swing 1.10.0 |
+| 序列化 / 协程 | kotlinx-serialization 1.7.3（JSON + Protobuf，用于同步省流通道）、kotlinx-coroutines-swing 1.11.0 |
 | 音频 | ffmpeg（外部可执行文件）为主引擎，Java Sound + mp3spi / vorbisspi / jflac 为回退引擎 |
 | 标签与封面 | jaudiotagger 3.0.1（读写内嵌标签、封面与歌词） |
 | 系统集成 | JNA + jna-platform 5.17.0：WinRT SMTC（系统媒体浮层）与 Win32 `RegisterHotKey`（媒体键）；AWT `SystemTray`（通知区域托盘） |

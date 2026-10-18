@@ -12,6 +12,10 @@ import java.util.UUID
 
 const val FAVORITES_PLAYLIST_ID = "system:favorites"
 
+/** 播放统计保留两年、最多 6 万行：长期使用也不会让 stats.json 无限膨胀。 */
+private const val STATS_RETENTION_DAYS = 730L
+private const val STATS_MAX_ROWS = 60_000
+
 /** 歌单仓库：用户歌单 + 「我喜欢的音乐」。 */
 class PlaylistRepository(
     /** 本地删除歌曲时回调（歌单删除前的一次快照），供同步层记录删除墓碑。 */
@@ -179,11 +183,18 @@ class HistoryRepository(
     private val _entries = MutableStateFlow<List<UsageEntry>>(emptyList())
     val entries: StateFlow<List<UsageEntry>> = _entries.asStateFlow()
 
+    /** 内容版本号：同一首歌重播时条目原地更新、条数不变，但内容变了。 */
+    private val _revision = MutableStateFlow(0L)
+    val revision: StateFlow<Long> = _revision.asStateFlow()
+
     fun load() {
         _entries.value = store.load().sortedByDescending { it.playedAt }
     }
 
-    private fun persist() = store.save(_entries.value)
+    private fun persist() {
+        store.save(_entries.value)
+        _revision.value = _revision.value + 1
+    }
 
     fun record(song: Song, playedMs: Long = 0L) {
         val now = System.currentTimeMillis()
@@ -264,11 +275,31 @@ class StatsRepository(private val history: HistoryRepository) {
     private val _stats = MutableStateFlow<List<PlayStat>>(emptyList())
     val stats: StateFlow<List<PlayStat>> = _stats.asStateFlow()
 
+    /** 内容版本号：统计是原地累加，条数不变也要让自动同步知道「有变化」。 */
+    private val _revision = MutableStateFlow(0L)
+    val revision: StateFlow<Long> = _revision.asStateFlow()
+
     fun load() {
-        _stats.value = store.load()
+        val loaded = store.load()
+        // 老数据只留两年、且封顶 6 万行：长期使用不会让 stats.json 无限膨胀
+        val cutoff = LocalDate.now().minusDays(STATS_RETENTION_DAYS).toString()
+        val pruned = loaded
+            .filter { it.day >= cutoff }
+            .sortedByDescending { it.day }
+            .take(STATS_MAX_ROWS)
+        _stats.value = pruned
+        if (pruned.size != loaded.size) persist()
     }
 
-    private fun persist() = store.save(_stats.value)
+    private fun persist() {
+        store.save(_stats.value)
+        // 每次落盘都算一次内容变化：条数不变（原地累加）也要让自动同步看到
+        touch()
+    }
+
+    private fun touch() {
+        _revision.value = _revision.value + 1
+    }
 
     private fun mutate(song: Song, playIncrement: Int, listenDelta: Long) {
         val day = LocalDate.now().toString()

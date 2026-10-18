@@ -162,8 +162,9 @@ class AppContainer {
     /** 本地歌单 / 历史 / 统计变化后，若开启了自动同步则静默同步一次。 */
     private fun observeLocalChangesForAutoSync() {
         scope.launch {
-            combine(playlists.playlists, history.entries, stats.stats) { p, h, s ->
-                Triple(p.size, h.size, s.size)
+            // 歌单看条数即可；历史与统计要听「内容版本」，否则原地累加的播放记录永远不会触发自动同步
+            combine(playlists.playlists, history.revision, stats.revision) { p, h, s ->
+                Triple(p.size, h, s)
             }.collect { localRevision += 1 }
         }
         scope.launch {

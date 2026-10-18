@@ -38,13 +38,10 @@ import moe.ouom.neriplayer.desktop.ui.mainWindowSize
 import moe.ouom.neriplayer.desktop.ui.platformUiScale
 import kotlinx.coroutines.delay
 
+private fun bootLog(stage: String) = moe.ouom.neriplayer.desktop.core.BootClock.mark(stage)
+
 fun main() {
     // 启动耗时打点：桌面端最容易退化的就是「双击到能操作」的这段时间
-    val bootStartedAt = System.nanoTime()
-    fun bootLog(stage: String) {
-        val elapsed = (System.nanoTime() - bootStartedAt) / 1_000_000
-        println("[boot] $stage +${elapsed}ms")
-    }
     bootLog("main-enter")
     setupDesktopLookAndFeel()
     bootLog("look-and-feel")
@@ -59,6 +56,7 @@ fun main() {
     bootLog("bootstrap-done")
     application {
         bootLog("application-loop")
+        moe.ouom.neriplayer.desktop.core.BootClock.mark("compose-enter")
         val settings by container.settings.state.collectAsState()
         var mainWindowFocused by remember { mutableStateOf(true) }
         var windowVisible by remember { mutableStateOf(true) }
@@ -84,6 +82,7 @@ fun main() {
         // 菜单不挂原生弹出菜单，而是左右键统一唤起应用内自绘的主题化控制面板，
         // 对应 Linux 版的 StatusNotifierItem + DBusMenu。
         val backgroundAvailable = remember { isTrayAvailable() }
+        moe.ouom.neriplayer.desktop.core.BootClock.mark("tray-check")
         // Windows 一定支持托盘；保留这个开关是为了在极简环境（如 Server Core）下别硬装
         val awtTraySupported = backgroundAvailable
 

@@ -79,6 +79,7 @@ fun HomeScreen(
     showMessage: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    moe.ouom.neriplayer.desktop.core.BootClock.mark("home-compose")
     val settings by container.settings.state.collectAsState()
     val historyEntries by container.history.entries.collectAsState()
     val library by container.library.songs.collectAsState()

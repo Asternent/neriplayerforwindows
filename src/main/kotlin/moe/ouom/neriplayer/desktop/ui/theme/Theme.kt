@@ -232,6 +232,7 @@ fun NeriTheme(
     colorSpec: String,
     content: @Composable () -> Unit,
 ) {
+    moe.ouom.neriplayer.desktop.core.BootClock.mark("theme-begin")
     val target = remember(seedColorHex, isDark, paletteStyle, colorSpec) {
         val scheme = buildDynamicScheme(
             seedArgb = seedColorArgb(seedColorHex),
@@ -241,6 +242,7 @@ fun NeriTheme(
         )
         scheme.toColorScheme()
     }
+    moe.ouom.neriplayer.desktop.core.BootClock.mark("theme-ready")
     val animated = animateScheme(target)
     MaterialTheme(
         colorScheme = animated,
