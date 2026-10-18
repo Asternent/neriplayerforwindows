@@ -1,11 +1,9 @@
 package moe.ouom.neriplayer.desktop.ui
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -22,7 +20,6 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.AnnotatedString
@@ -33,7 +30,6 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import moe.ouom.neriplayer.desktop.core.LyricLine
@@ -43,9 +39,6 @@ import kotlin.math.floor
 
 /** 扫光的重绘间隔：30fps。按字符插值后已经足够顺滑，比 60fps 省一半绘制开销。 */
 private const val FRAME_INTERVAL_MS = 33L
-
-/** 逐行裁剪时上下多放出的像素，让文字发光不被裁成硬边。 */
-private const val GLOW_BLEED_PX = 12f
 
 /**
  * 逐字高亮（卡拉OK）所需的运行时数据。
@@ -91,20 +84,16 @@ fun KaraokeLyricText(
     maxLines: Int = Int.MAX_VALUE,
     overflow: TextOverflow = TextOverflow.Clip,
     softWrap: Boolean = true,
-    /** 上下留白：给 TextStyle 的阴影 / 发光留出绘制空间，否则会被画布裁掉。 */
-    glowPadding: Dp = 0.dp,
 ) {
     if (karaoke == null || karaoke.words.isEmpty()) {
-        // 保持与扫光路径相同的上下留白，避免同一行在「有逐字 / 没逐字」之间切换时跳动
-        Box(modifier.fillMaxWidth().padding(vertical = glowPadding)) {
-            BasicText(
-                text = text,
-                style = style,
-                maxLines = maxLines,
-                overflow = overflow,
-                softWrap = softWrap,
-            )
-        }
+        BasicText(
+            text = text,
+            modifier = modifier,
+            style = style,
+            maxLines = maxLines,
+            overflow = overflow,
+            softWrap = softWrap,
+        )
         return
     }
 
@@ -146,16 +135,13 @@ fun KaraokeLyricText(
         }
         val heightDp = with(density) { layout.size.height.toDp() }
         if (heightDp <= 0.dp) return@BoxWithConstraints
-        val paddingPx = with(density) { glowPadding.toPx() }
         Canvas(
             Modifier
                 .fillMaxWidth()
-                .height(heightDp + glowPadding * 2)
+                .height(heightDp)
                 .clipToBounds(),
         ) {
-            translate(top = paddingPx) {
-                drawKaraokeLayout(layout, style.color, activeColor, progress.floatValue)
-            }
+            drawKaraokeLayout(layout, style.color, activeColor, progress.floatValue)
         }
     }
 }
@@ -202,9 +188,8 @@ private fun DrawScope.drawKaraokeLayout(
         val lineStart = layout.getLineStart(lineIndex)
         val lineEnd = layout.getLineEnd(lineIndex, visibleEnd = true)
         if (lineEnd <= lineStart) continue
-        // 上下各放一点：让文字阴影 / 发光能溢出字身，不被裁成硬边
-        val top = layout.getLineTop(lineIndex) - GLOW_BLEED_PX
-        val bottom = layout.getLineBottom(lineIndex) + GLOW_BLEED_PX
+        val top = layout.getLineTop(lineIndex)
+        val bottom = layout.getLineBottom(lineIndex)
         val left = layout.getLineLeft(lineIndex)
         val right = layout.getLineRight(lineIndex)
         when {
