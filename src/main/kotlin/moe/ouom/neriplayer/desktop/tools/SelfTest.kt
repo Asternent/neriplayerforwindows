@@ -1036,6 +1036,14 @@ private fun checkDesktopSyncFeatures() {
         "${httpForTest.jarKeyFor("evilbilibili.com")} / ${httpForTest.jarKeyFor("api.bilibili.com")}",
     )
 
+    // 14. 「关于」里的版本号来自构建脚本生成，必须是 x.y.z 而不是写死的旧值
+    val buildVersion = moe.ouom.neriplayer.desktop.core.BuildInfo.VERSION
+    check(
+        "build-version-present",
+        Regex("""^\d+\.\d+\.\d+$""").matches(buildVersion) && buildVersion != "0.0.0",
+        buildVersion,
+    )
+
     log("desktop sync checks done")
 }
 

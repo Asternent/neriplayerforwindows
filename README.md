@@ -39,9 +39,9 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 
 | 文件 | 说明 |
 | --- | --- |
-| `NeriPlayer-1.8.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
-| `NeriPlayer-1.8.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.8.0.msi` |
-| `NeriPlayer-1.8.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
+| `NeriPlayer-1.8.1.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
+| `NeriPlayer-1.8.1.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.8.1.msi` |
+| `NeriPlayer-1.8.1-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
 
 安装完成后从开始菜单启动「NeriPlayer」。
 
@@ -389,8 +389,8 @@ Windows 把「漫游配置」和「本机数据」分成两棵树，本应用同
 ```powershell
 gradlew run                    # 直接运行
 gradlew createDistributable    # 免安装应用目录：build\compose\binaries\main\app\NeriPlayer\
-gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.8.0.msi
-gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.8.0.exe
+gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.8.1.msi
+gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.8.1.exe
 ```
 
 - `gradlew` 是批处理包装脚本，在 CMD / PowerShell 里直接写 `gradlew`（或 `.\gradlew.bat`）；

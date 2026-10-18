@@ -11,11 +11,35 @@ plugins {
 }
 
 group = "moe.ouom.neriplayer"
-// Windows 版自己的版本号：1.6.0 跟进 Android 原版的评论增强、歌词修复、WebDAV 同步与歌单改进
-version = "1.8.0"
+// Windows 版自己的版本号（唯一来源）：设置页「关于」里的版本由下面生成的 BuildInfo 提供
+version = "1.8.1"
+
+// 构建时生成 BuildInfo.VERSION：界面里不再手写版本号，避免出现「装的是 1.8、显示的是 1.6」
+val generateBuildInfo by tasks.registering {
+    val outputDir = layout.buildDirectory.dir("generated/buildinfo")
+    val appVersion = version.toString()
+    inputs.property("appVersion", appVersion)
+    outputs.dir(outputDir)
+    doLast {
+        val file = outputDir.get().file("moe/ouom/neriplayer/desktop/core/BuildInfo.kt").asFile
+        file.parentFile.mkdirs()
+        file.writeText(
+            """
+            package moe.ouom.neriplayer.desktop.core
+
+            /** 由 build.gradle.kts 的 generateBuildInfo 生成，请勿手改。 */
+            object BuildInfo {
+                const val VERSION: String = "$appVersion"
+            }
+
+            """.trimIndent(),
+        )
+    }
+}
 
 kotlin {
     jvmToolchain(17)
+    sourceSets["main"].kotlin.srcDir(generateBuildInfo)
 }
 
 dependencies {
@@ -211,7 +235,7 @@ compose.desktop {
             // （那条路径不需要 WiX，产出 app\NeriPlayer\NeriPlayer.exe）。
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "NeriPlayer"
-            packageVersion = "1.8.0"
+            packageVersion = "1.8.1"
             // 注意：下面这些是交给 jpackage 的安装包元数据，必须保持 ASCII。
             // jpackage 读取参数文件用的是系统默认字符集（JDK 17 在中文 Windows 上是 GBK），
             // 而 Compose 插件写入的是 UTF-8 —— description 里一旦有中文就会乱码，

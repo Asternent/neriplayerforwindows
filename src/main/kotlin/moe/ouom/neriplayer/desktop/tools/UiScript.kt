@@ -250,6 +250,8 @@ suspend fun runUiScript(
                 host.log("login-check ${source.displayName}: $result")
             }
             "log" -> host.log(command.argument)
+            // 自动化验证安装包版本：日志里直接打印「关于」页展示的版本
+            "version" -> host.log("version=${moe.ouom.neriplayer.desktop.core.BuildInfo.VERSION}")
             "mem-report" -> {
                 if (command.argument.isNotBlank()) host.log("[阶段] ${command.argument}")
                 host.logMemory()

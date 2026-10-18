@@ -67,6 +67,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import moe.ouom.neriplayer.desktop.core.AppContainer
 import moe.ouom.neriplayer.desktop.core.AppDirs
+import moe.ouom.neriplayer.desktop.core.BuildInfo
 import moe.ouom.neriplayer.desktop.core.DarkModeSetting
 import moe.ouom.neriplayer.desktop.core.FfmpegSupport
 import moe.ouom.neriplayer.desktop.core.MediaSource
@@ -606,7 +607,7 @@ fun SettingsScreen(
                 description = "版本信息、运行环境与数据管理",
                 icon = Icons.Outlined.Info,
             ) {
-                InfoRow("应用版本", "NeriPlayer Desktop 1.6.0")
+                InfoRow("应用版本", "NeriPlayer Desktop ${BuildInfo.VERSION}")
                 InfoRow("音频引擎", if (FfmpegSupport.available) "ffmpeg（${FfmpegSupport.version.take(28)}…）" else "Java Sound 回退引擎")
                 InfoRow("音效支持", if (container.player.supportsEffects) "倍速 / 变调 / 响度 / 均衡器可用" else "当前不可用（缺少 ffmpeg）")
                 InfoRow("数据目录", AppDirs.dataDir.absolutePath)
