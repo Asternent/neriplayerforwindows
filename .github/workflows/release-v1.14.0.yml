@@ -1,0 +1,131 @@
+name: Publish Windows v1.14.0 prerelease
+
+on:
+  push:
+    branches: [release/windows-v1.14.0]
+    paths:
+      - .github/workflows/release-v1.14.0.yml
+      - .github/release-notes-v1.14.0.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-windows-v1.14.0
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Asternent/neriplayerforwindows' && github.ref == 'refs/heads/release/windows-v1.14.0'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the verified application commit
+        uses: actions/checkout@v4
+        with:
+          ref: 4e454ff7105224cf4e3b016496049eb3ffbb9684
+          persist-credentials: false
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Test and compile all Windows packages
+        shell: pwsh
+        run: |
+          .\gradlew.bat --no-daemon --console=plain check packageMsi packageExe createDistributable
+          if ($LASTEXITCODE -ne 0) { throw 'Verification or packaging failed' }
+      - name: Verify product metadata and prepare release files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          Copy-Item -LiteralPath build\compose\binaries\main\msi\NeriPlayer-1.14.0.msi -Destination release
+          Copy-Item -LiteralPath build\compose\binaries\main\exe\NeriPlayer-1.14.0.exe -Destination release
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $db = $installer.OpenDatabase((Resolve-Path release\NeriPlayer-1.14.0.msi).Path, 0)
+          $view = $db.OpenView('SELECT `Property`, `Value` FROM `Property`')
+          $view.Execute()
+          $properties = @{}
+          while ($row = $view.Fetch()) { $properties[$row.StringData(1)] = $row.StringData(2) }
+          $view.Close()
+          if ($properties['ProductName'] -ne 'NeriPlayer' -or $properties['ProductVersion'] -ne '1.14.0') {
+            throw 'MSI product metadata does not match the release'
+          }
+          $exeVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path release\NeriPlayer-1.14.0.exe).Path)
+          if ($exeVersion.ProductVersion -ne '1.14.0') { throw 'EXE version mismatch' }
+          Compress-Archive -LiteralPath build\compose\binaries\main\app\NeriPlayer -DestinationPath release\NeriPlayer-1.14.0-windows-portable.zip
+          $suites = @(Get-ChildItem build\test-results\test\TEST-*.xml | ForEach-Object { ([xml](Get-Content -LiteralPath $_.FullName -Raw)).testsuite })
+          $total = [int](($suites | ForEach-Object { [int]$_.tests } | Measure-Object -Sum).Sum)
+          $failures = [int](($suites | ForEach-Object { [int]$_.failures } | Measure-Object -Sum).Sum)
+          $errors = [int](($suites | ForEach-Object { [int]$_.errors } | Measure-Object -Sum).Sum)
+          $skipped = [int](($suites | ForEach-Object { [int]$_.skipped } | Measure-Object -Sum).Sum)
+          if ($total -ne 66 -or $failures -ne 0 -or $errors -ne 0 -or $skipped -ne 0) { throw 'Unexpected regression test result' }
+          @{
+            version = '1.14.0'
+            sourceCommit = '4e454ff7105224cf4e3b016496049eb3ffbb9684'
+            platform = 'windows-x64'
+            total = $total
+            failures = $failures
+            errors = $errors
+            skipped = $skipped
+            validationEnvironment = 'github_actions_isolated_fixtures'
+            installerUpgradeTested = $false
+          } | ConvertTo-Json | Set-Content -LiteralPath release\TEST-SUMMARY.json -Encoding utf8
+          $checksums = Get-ChildItem release -File | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          }
+          $checksums | Set-Content -LiteralPath release\SHA256SUMS.txt -Encoding ascii
+          Get-ChildItem release | Select-Object Name, Length
+      - name: Keep verified release files for the publisher
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-v1.14.0
+          path: release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the release description
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download the verified build files
+        uses: actions/download-artifact@v4
+        with:
+          name: release-v1.14.0
+          path: release
+      - name: Verify checksums and publish without replacing existing releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd release && sha256sum -c SHA256SUMS.txt)
+          jq -e '.sourceCommit == "4e454ff7105224cf4e3b016496049eb3ffbb9684" and .total == 66 and .failures == 0 and .errors == 0' release/TEST-SUMMARY.json
+          if gh release view v1.14.0 --repo Asternent/neriplayerforwindows >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to overwrite it.' >&2
+            exit 1
+          fi
+          gh release create v1.14.0 \
+            --repo Asternent/neriplayerforwindows \
+            --target 4e454ff7105224cf4e3b016496049eb3ffbb9684 \
+            --prerelease --latest=false \
+            --title 'NeriPlayer for Windows 1.14.0 - upstream updates and safety fixes (prerelease)' \
+            --notes-file .github/release-notes-v1.14.0.md \
+            release/NeriPlayer-1.14.0.exe \
+            release/NeriPlayer-1.14.0.msi \
+            release/NeriPlayer-1.14.0-windows-portable.zip \
+            release/SHA256SUMS.txt \
+            release/TEST-SUMMARY.json
