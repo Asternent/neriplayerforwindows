@@ -17,6 +17,13 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -26,6 +33,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import moe.ouom.neriplayer.desktop.core.AppContainer
 import moe.ouom.neriplayer.desktop.net.LyricSource
+import moe.ouom.neriplayer.desktop.net.BiliSubtitleTrack
+import moe.ouom.neriplayer.desktop.core.MediaSource
+import moe.ouom.neriplayer.desktop.core.normalizeLyricOffsetMs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /**
@@ -99,6 +112,13 @@ fun LyricsSourceSettingsSection(
             onChange = { value -> container.settings.update { it.copy(lyricOffsetAmllMs = value) } },
             onCommit = { container.reloadLyricsAfterSourceChange() },
         )
+        LyricOffsetSlider(
+            label = "哔哩哔哩 CC 字幕",
+            value = settings.lyricOffsetBiliCcMs,
+            onChange = { value -> container.settings.update { it.copy(lyricOffsetBiliCcMs = value) } },
+            onCommit = { container.reloadLyricsAfterSourceChange() },
+        )
+        BiliSubtitleControls(container, showMessage)
 
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -109,6 +129,7 @@ fun LyricsSourceSettingsSection(
                         lyricOffsetLrclibMs = 0L,
                         lyricOffsetKugouMs = 0L,
                         lyricOffsetAmllMs = 0L,
+                        lyricOffsetBiliCcMs = 0L,
                     )
                 }
                 container.reloadLyricsAfterSourceChange()
@@ -152,26 +173,107 @@ private fun LyricOffsetSlider(
     onChange: (Long) -> Unit,
     onCommit: () -> Unit,
 ) {
+    var pending by remember(value) { mutableStateOf(normalizeLyricOffsetMs(value)) }
+    var editing by remember { mutableStateOf(false) }
+    var input by remember(value) { mutableStateOf(value.toString()) }
+    fun commit(next: Long) {
+        pending = normalizeLyricOffsetMs(next)
+        onChange(pending)
+        onCommit()
+    }
     Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            Text(
-                text = if (value > 0) "+${value}ms" else "${value}ms",
+            TextButton(onClick = { input = pending.toString(); editing = true }) { Text(
+                text = if (pending > 0) "+${pending}ms" else "${pending}ms",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = if (value == 0L) {
+                color = if (pending == 0L) {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 } else {
                     MaterialTheme.colorScheme.primary
                 },
-            )
+            ) }
         }
         Slider(
-            value = value.toFloat(),
-            onValueChange = { raw -> onChange((raw / 50f).roundToInt() * 50L) },
-            onValueChangeFinished = onCommit,
+            value = pending.toFloat(),
+            onValueChange = { raw -> pending = normalizeLyricOffsetMs(raw.toLong()) },
+            onValueChangeFinished = { commit(pending) },
             // 与上游一致的量程：±5 秒、50ms 一档
             valueRange = -5000f..5000f,
+        )
+        Row {
+            TextButton(onClick = { commit(pending - 50) }, enabled = pending > -5000) { Text("−50 ms") }
+            TextButton(onClick = { commit(pending + 50) }, enabled = pending < 5000) { Text("+50 ms") }
+            TextButton(onClick = { commit(0) }, enabled = pending != 0L) { Text("重置") }
+        }
+    }
+    if (editing) {
+        val parsed = input.toLongOrNull()?.takeIf { it in -5000L..5000L }
+        AlertDialog(
+            onDismissRequest = { editing = false },
+            title = { Text("$label · 偏移") },
+            text = {
+                OutlinedTextField(
+                    value = input, onValueChange = { input = it }, singleLine = true,
+                    label = { Text("−5000 至 +5000 毫秒（50 ms 一档）") },
+                    isError = parsed == null,
+                )
+            },
+            confirmButton = {
+                TextButton(enabled = parsed != null, onClick = { parsed?.let(::commit); editing = false }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { editing = false }) { Text("取消") } },
+        )
+    }
+}
+
+@Composable
+private fun BiliSubtitleControls(container: AppContainer, showMessage: (String) -> Unit) {
+    val settings by container.settings.state.collectAsState()
+    val song by container.player.currentSong.collectAsState()
+    val scope = rememberCoroutineScope()
+    var tracks by remember(song?.key) { mutableStateOf<List<BiliSubtitleTrack>>(emptyList()) }
+    var loading by remember(song?.key) { mutableStateOf(false) }
+    fun changed() = container.reloadLyricsAfterSourceChange()
+    Spacer(Modifier.height(8.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("将哔哩哔哩 CC 字幕作为歌词（需要登录）", modifier = Modifier.weight(1f))
+        Switch(checked = settings.biliCcLyricsEnabled, onCheckedChange = { enabled ->
+            container.settings.update { it.copy(biliCcLyricsEnabled = enabled) }; changed()
+        })
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("没有人工字幕时允许 AI 字幕", modifier = Modifier.weight(1f))
+        Switch(checked = settings.biliCcAiFallback, enabled = settings.biliCcLyricsEnabled, onCheckedChange = { enabled ->
+            container.settings.update { it.copy(biliCcAiFallback = enabled) }; changed()
+        })
+    }
+    Text("默认字幕轨道：${settings.biliCcPreferredLanguage.ifBlank { "自动（优先中文人工字幕）" }}",
+        style = MaterialTheme.typography.bodySmall)
+    Row {
+        TextButton(onClick = {
+            container.settings.update { it.copy(biliCcPreferredLanguage = "") }; changed()
+        }, enabled = settings.biliCcPreferredLanguage.isNotBlank()) { Text("恢复自动") }
+        TextButton(enabled = song?.source == MediaSource.BILIBILI && !loading, onClick = {
+            val target = song ?: return@TextButton
+            loading = true
+            scope.launch {
+                try {
+                    val loaded = withContext(Dispatchers.IO) { container.online.bilibili.subtitleTracks(target) }
+                    if (song?.key == target.key) tracks = loaded
+                    if (loaded.isEmpty()) showMessage("没有可用字幕，请确认已登录且当前视频提供 CC 字幕")
+                } finally { loading = false }
+            }
+        }) { Text(if (loading) "读取中…" else "读取当前视频字幕轨道") }
+    }
+    tracks.forEach { track ->
+        FilterChip(
+            selected = settings.biliCcPreferredLanguage == track.language,
+            onClick = {
+                container.settings.update { it.copy(biliCcPreferredLanguage = track.language) }; changed()
+            },
+            label = { Text(track.label + if (track.isAi) "（AI）" else "") },
         )
     }
 }

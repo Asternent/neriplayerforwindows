@@ -1,5 +1,8 @@
 package moe.ouom.neriplayer.desktop.core
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import moe.ouom.neriplayer.desktop.net.LyricQueryResult
 import moe.ouom.neriplayer.desktop.net.LyricSource
 import java.io.File
@@ -41,22 +44,23 @@ object LrcParser {
      * 这样「逐字歌词」对本地 .lrc 也生效；没有行内标签的行仍然是行级时间。
      */
     fun parse(raw: String, extraOffsetMs: Long = 0L): List<LyricLine> {
-        if (raw.isBlank()) return emptyList()
-        var offset = 0L
+        if (raw.isBlank() || raw.length > 2_000_000) return emptyList()
+        // offset 是全文件元数据；即使放在文件末尾，也必须作用于此前所有行。
+        val offset = raw.lineSequence().mapNotNull { line ->
+            metaRegex.find(line.trim().removePrefix("\uFEFF"))?.takeIf { it.groupValues[1].equals("offset", true) }
+                ?.groupValues?.get(2)?.trim()?.toLongOrNull()
+        }.lastOrNull()?.coerceIn(-86_400_000L, 86_400_000L) ?: 0L
         val collected = ArrayList<LyricLine>()
         raw.lineSequence().forEach { line ->
-            val trimmed = line.trim()
+            val trimmed = line.trim().removePrefix("\uFEFF")
             if (trimmed.isEmpty()) return@forEach
             metaRegex.find(trimmed)?.let { meta ->
-                if (meta.groupValues[1].lowercase() == "offset") {
-                    offset = meta.groupValues[2].trim().toLongOrNull() ?: 0L
-                }
                 return@forEach
             }
             val matches = timeTagRegex.findAll(trimmed).toList()
             if (matches.isEmpty()) return@forEach
             val content = trimmed.substring(matches.last().range.last + 1)
-            val shift = offset + extraOffsetMs
+            val shift = offset + extraOffsetMs.coerceIn(-86_400_000L, 86_400_000L)
             val wordMatches = wordTagRegex.findAll(content).toList()
             if (wordMatches.isEmpty()) {
                 val text = content.trim()
@@ -92,11 +96,16 @@ object LrcParser {
             }
             val text = words.joinToString("") { it.text }
             if (text.isNotBlank()) {
-                collected += LyricLine(
-                    timeMs = (lineStart - shift).coerceAtLeast(0L),
-                    text = text,
-                    words = words,
-                )
+                matches.forEach { timestamp ->
+                    val delta = timestampMs(timestamp) - lineStart
+                    collected += LyricLine(
+                        timeMs = (timestampMs(timestamp) - shift).coerceAtLeast(0L), text = text,
+                        words = words.map { word -> word.copy(
+                            startMs = (word.startMs + delta).coerceAtLeast(0),
+                            endMs = if (word.endMs == 0L) 0L else (word.endMs + delta).coerceAtLeast(0),
+                        ) },
+                    )
+                }
             }
         }
         val sorted = collected.sortedBy { it.timeMs }.toMutableList()
@@ -237,8 +246,11 @@ object LrcParser {
             val distinct = group.filter { it.text.isNotBlank() }.distinctBy { it.text }
             if (distinct.isEmpty()) return@forEach
             // 保留整行对象：逐字时间轴（words）就挂在这一行上，不能只留文本
-            main += distinct.first()
-            distinct.drop(1).forEach { extra -> translation += LyricLine(time, extra.text) }
+            val credits = distinct.filter { isLyricCreditMetadataLine(it.text) }
+            val content = distinct.filterNot { isLyricCreditMetadataLine(it.text) }
+            main += credits
+            content.firstOrNull()?.let { main += it }
+            content.drop(1).forEach { extra -> translation += LyricLine(time, extra.text) }
         }
         return main.sortedBy { it.timeMs } to translation.sortedBy { it.timeMs }
     }
@@ -277,7 +289,7 @@ internal fun isLyricCreditMetadataLine(text: String): Boolean {
 /** 这一行是不是「/」「//」这种未翻译占位。 */
 internal fun isUntranslatedPlaceholderText(text: String): Boolean {
     val normalized = text.replace('／', '/').filterNot(Char::isWhitespace)
-    return normalized.length >= 2 && normalized.all { it == '/' }
+    return normalized.isNotEmpty() && normalized.all { it == '/' }
 }
 
 /**
@@ -298,6 +310,7 @@ class LyricsRepository(
     private val preferredSource: () -> LyricSource = { LyricSource.AUTO },
     /** 各来源的默认时间偏移（毫秒）。 */
     private val offsetMs: (LyricSource) -> Long = { 0L },
+    private val biliCcOffsetMs: () -> Long = { 0L },
 ) {
     // 歌词缓存按 LRU 限长：听歌久了缓存会一直涨，而歌词只在当前/最近几首之间来回用
     private val cache = object : LinkedHashMap<String, Lyrics>(64, 0.75f, true) {
@@ -305,32 +318,45 @@ class LyricsRepository(
             size > MAX_LYRICS_CACHE
     }
     private val cacheLock = Any()
+    private var cacheGeneration = 0L
 
     fun cached(song: Song): Lyrics? = synchronized(cacheLock) { cache[song.key] }
 
     fun put(song: Song, lyrics: Lyrics) {
-        synchronized(cacheLock) { cache[song.key] = lyrics }
+        synchronized(cacheLock) { cacheGeneration++; cache[song.key] = lyrics }
     }
 
     fun invalidate(song: Song) {
-        synchronized(cacheLock) { cache.remove(song.key) }
+        synchronized(cacheLock) { cacheGeneration++; cache.remove(song.key) }
     }
 
     /** 清掉全部缓存：改过歌词来源或偏移之后要重新取一次。 */
     fun invalidateAll() {
-        synchronized(cacheLock) { cache.clear() }
+        synchronized(cacheLock) { cacheGeneration++; cache.clear() }
     }
 
     suspend fun load(song: Song): Lyrics {
-        synchronized(cacheLock) { cache[song.key] }?.let { return it }
+        val generation = synchronized(cacheLock) {
+            cache[song.key]?.let { return it }
+            cacheGeneration
+        }
+        suspend fun remember(value: Lyrics): Lyrics {
+            currentCoroutineContext().ensureActive()
+            val displayed = value.copy(lines = prepareBilingualLyricsForDisplay(value.lines))
+            synchronized(cacheLock) {
+                // 旧请求不准回填清空后的缓存；空结果不缓存，登录/网络恢复后仍能重试。
+                if (cacheGeneration == generation && displayed.lines.isNotEmpty()) cache[song.key] = displayed
+            }
+            return displayed
+        }
 
         val preferred = preferredSource()
         if (preferred != LyricSource.AUTO && song.source != MediaSource.LOCAL) {
-            var hit = runCatching { preferredProvider(song, preferred) }.getOrNull()
+            var hit = query { preferredProvider(song, preferred) }
             
             // 歌词音译回退：如果指定了第三方来源且没拿到音译，回退到网易云补全音译
             if (hit != null && hit.raw.isNotBlank() && hit.romanized.isNullOrBlank() && preferred != LyricSource.NETEASE) {
-                val fallback = runCatching { preferredProvider(song, LyricSource.NETEASE) }.getOrNull()
+                val fallback = query { preferredProvider(song, LyricSource.NETEASE) }
                 if (fallback?.romanized?.isNotBlank() == true) {
                     hit = hit.copy(romanized = fallback.romanized)
                 }
@@ -338,27 +364,31 @@ class LyricsRepository(
             
             if (hit != null && hit.raw.isNotBlank()) {
                 val lyrics = fromResult(hit, offsetMs(preferred))
-                synchronized(cacheLock) { cache[song.key] = lyrics }
-                return lyrics
+                if (lyrics.lines.isNotEmpty()) return remember(lyrics)
             }
         }
 
         localLyrics(song)?.let { lyrics ->
-            synchronized(cacheLock) { cache[song.key] = lyrics }
-            return lyrics
+            if (lyrics.lines.isNotEmpty()) return remember(lyrics)
         }
 
-        // 空结果也会进 LRU 缓存（下次直接命中），所以不需要额外的「查不到」集合：
-        // 那个集合既不淘汰也不会重试，登录后/新放了 .lrc 也永远拿不到歌词。
-        val remote = runCatching { remoteProvider(song) }.getOrNull()
+        // 空结果不缓存：登录、添加 sidecar 或网络恢复后允许重新查询。
+        val remote = query { remoteProvider(song) }
         if (remote != null && remote.raw.isNotBlank()) {
-            val lyrics = fromResult(remote, offsetMs(LyricSource.AUTO))
-            synchronized(cacheLock) { cache[song.key] = lyrics }
-            return lyrics
+            val lyrics = fromResult(remote, if (remote.isBiliCc) biliCcOffsetMs() else offsetMs(LyricSource.AUTO))
+            return remember(lyrics)
         }
         val empty = Lyrics()
-        synchronized(cacheLock) { cache[song.key] = empty }
         return empty
+    }
+
+    private suspend fun query(provider: suspend () -> LyricQueryResult?): LyricQueryResult? = try {
+        currentCoroutineContext().ensureActive()
+        provider()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
     }
 
     private fun localLyrics(song: Song): Lyrics? {
@@ -400,6 +430,12 @@ class LyricsRepository(
     }
 
     private fun fromResult(result: LyricQueryResult, offsetMs: Long): Lyrics {
+        if (result.timedLines.isNotEmpty()) {
+            val lines = result.timedLines.map { line ->
+                line.copy(timeMs = (line.timeMs - offsetMs).coerceAtLeast(0), endMs = (line.endMs - offsetMs).coerceAtLeast(0))
+            }
+            return Lyrics(raw = result.raw, lines = lines, source = result.source)
+        }
         // 逐字来源（网易云 yrc / AMLL TTML）：raw 仍然是可内嵌、可下载的 LRC，
         // 逐字时间轴单独带在 wordRaw 里，避免把 TTML 写进标签或 .lrc 文件。
         val wordRaw = result.wordRaw?.takeIf { it.isNotBlank() }

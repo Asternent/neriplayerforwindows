@@ -29,6 +29,12 @@ import kotlinx.coroutines.withContext
 import moe.ouom.neriplayer.desktop.core.AppDirs
 import moe.ouom.neriplayer.desktop.core.MediaSource
 import moe.ouom.neriplayer.desktop.core.Song
+import moe.ouom.neriplayer.desktop.core.DownloadCatalog
+import moe.ouom.neriplayer.desktop.core.artworkCacheFile
+import moe.ouom.neriplayer.desktop.core.readArtworkFile
+import moe.ouom.neriplayer.desktop.core.withDownloadedArtwork
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.staticCompositionLocalOf
 import java.io.ByteArrayInputStream
 import java.io.File
 import javax.imageio.ImageIO
@@ -50,11 +56,14 @@ private const val MAX_ARTWORK_ENTRIES = 320
 
 private const val ARTWORK_FAILURE_TTL_MS = 60_000L
 
+val LocalDownloadCatalog = staticCompositionLocalOf<DownloadCatalog?> { null }
+private val artworkHttp by lazy { moe.ouom.neriplayer.desktop.net.HttpService() }
+
 private object ArtworkCache {
     /** 访问顺序的 LRU；淘汰由 [put] 里的循环按「字节预算 + 条目上限」执行。 */
     private val memory = LinkedHashMap<String, ImageBitmap>(64, 0.75f, true)
     private var bytes = 0L
-    private val failed = HashMap<String, Long>()
+    private val failed = LinkedHashMap<String, Long>()
 
     fun get(key: String): ImageBitmap? = synchronized(memory) { memory[key] }
 
@@ -89,7 +98,10 @@ private object ArtworkCache {
         }
     }
 
-    fun markFailed(key: String) = synchronized(failed) { failed[key] = System.currentTimeMillis() }
+    fun markFailed(key: String) = synchronized(failed) {
+        failed[key] = System.currentTimeMillis()
+        while (failed.size > MAX_ARTWORK_ENTRIES) failed.remove(failed.keys.first())
+    }
 }
 
 private fun artworkCacheKey(song: Song): String =
@@ -141,21 +153,14 @@ private suspend fun loadRemoteBitmap(
     maxPx: Int = ARTWORK_MAX_PX,
 ): ImageBitmap? =
     withContext(Dispatchers.IO) {
-        val cached = File(AppDirs.coverDir, url.hashCode().toString() + ".img")
+        val cached = artworkCacheFile(url)
         if (cached.isFile) {
-            runCatching { cached.readBytes() }.getOrNull()?.let { bytes ->
+            readArtworkFile(cached)?.let { bytes ->
                 decodeArtwork(bytes, maxPx)?.let { return@withContext it }
             }
         }
-        val bytes = runCatching {
-            val connection = java.net.URI(url).toURL().openConnection().apply {
-                connectTimeout = 12_000
-                readTimeout = 15_000
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NeriPlayer")
-                setRequestProperty("Referer", referer ?: "https://music.163.com/")
-            }
-            connection.getInputStream().use { it.readBytes() }
-        }.getOrNull() ?: return@withContext null
+        val bytes = artworkHttp.download(url, mapOf("Referer" to (referer ?: "https://music.163.com/")))
+            ?: return@withContext null
         runCatching { cached.writeBytes(bytes) }
         decodeArtwork(bytes, maxPx)
     }
@@ -165,7 +170,7 @@ private suspend fun loadSongArtwork(song: Song): ImageBitmap? = withContext(Disp
     if (!localPath.isNullOrBlank()) {
         val file = File(localPath)
         if (file.isFile) {
-            runCatching { file.readBytes() }.getOrNull()?.let { bytes ->
+            readArtworkFile(file)?.let { bytes ->
                 decodeArtwork(bytes)?.let { return@withContext it }
             }
         }
@@ -177,14 +182,16 @@ private suspend fun loadSongArtwork(song: Song): ImageBitmap? = withContext(Disp
 @Composable
 fun rememberArtwork(song: Song?): ImageBitmap? {
     if (song == null) return null
-    val key = artworkCacheKey(song)
+    val downloads = LocalDownloadCatalog.current?.items?.collectAsState()?.value
+    val effective = song.withDownloadedArtwork(downloads?.get(song.key))
+    val key = artworkCacheKey(effective)
     // state 里带上 key，确保切歌后只会使用当前歌曲的封面，不会继续显示上一首
     val state by produceState<Pair<String, ImageBitmap?>?>(initialValue = null, key) {
         val cached = ArtworkCache.get(key)
         value = key to cached
         if (cached != null) return@produceState
         if (ArtworkCache.hasFailed(key)) return@produceState
-        val loaded = loadSongArtwork(song)
+        val loaded = loadSongArtwork(effective)
         if (loaded == null) {
             ArtworkCache.markFailed(key)
         } else {

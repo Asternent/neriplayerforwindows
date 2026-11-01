@@ -26,7 +26,7 @@ class WebDavSyncTransport(
     }
 
     private fun buildUrl(path: String): String {
-        val base = baseUrl.trimEnd('/')
+        val base = validatedWebDavUrl(baseUrl).trimEnd('/')
         val relative = path.trimStart('/')
         return "$base/$relative"
     }
@@ -42,6 +42,7 @@ class WebDavSyncTransport(
 
     /** 读取同步文件：只有 404（或空文件）才算「远端没有数据」，其它错误一律上报。 */
     fun readSyncFile(useDataSaver: Boolean): RemoteSyncRead {
+        archiveProtectionFailure()?.let { return RemoteSyncRead.Failed(it) }
         val candidates = listOf(SyncDataSerializer.fileNameFor(useDataSaver)) +
             SyncDataSerializer.readFallbackFileNames(useDataSaver)
 
@@ -87,6 +88,7 @@ class WebDavSyncTransport(
         createOnly: Boolean = false,
     ): SyncWriteResult {
         if (content.isEmpty()) return SyncWriteResult.Failed("拒绝上传空的同步数据")
+        archiveProtectionFailure()?.let { return SyncWriteResult.Failed(it) }
         val path = SyncDataSerializer.fileNameFor(useDataSaver)
         val url = buildUrl(path)
         val baseHeaders = mutableMapOf("Content-Type" to "application/octet-stream")
@@ -101,18 +103,17 @@ class WebDavSyncTransport(
             return result
         }
 
-        var response = http.executeBytes("PUT", url, body = content, headers = headers(conditionHeaders()))
+        val response = http.executeBytes("PUT", url, body = content, headers = headers(conditionHeaders()))
             ?: return SyncWriteResult.Failed("网络请求失败")
 
         if (response.status == 412) {
-            // 412 可能只是「服务器不认弱 ETag / 时间戳粒度太粗」。重新读一次：
-            // 内容没变就说明没人改过，可以无条件重写；变了才是真冲突。
+            // 已有相同内容即可视为幂等成功；绝不能取消条件再 PUT，
+            // 否则第二次读取之后的并发写会被静默覆盖。
             val current = (readSyncFile(useDataSaver) as? RemoteSyncRead.Found)?.file
             if (current == null || !sameContent(current.content, content)) {
                 return SyncWriteResult.Conflict
             }
-            response = http.executeBytes("PUT", url, body = content, headers = headers(baseHeaders))
-                ?: return SyncWriteResult.Failed("网络请求失败")
+            return SyncWriteResult.Success(current.headSha, current.headSha)
         }
 
         if (response.status in 200..299 || response.status == 204) {
@@ -120,7 +121,8 @@ class WebDavSyncTransport(
             // 没有强 ETag 的服务器（坚果云）写完必须读回校验，否则并发写会静默丢数据
             if (newEtag.isBlank()) {
                 val readBack = (readSyncFile(useDataSaver) as? RemoteSyncRead.Found)?.file
-                if (readBack != null && !sameContent(readBack.content, content)) {
+                    ?: return SyncWriteResult.Failed("写入后无法读回校验，未确认同步成功")
+                if (!sameContent(readBack.content, content)) {
                     return SyncWriteResult.Conflict
                 }
             }
@@ -134,7 +136,7 @@ class WebDavSyncTransport(
         /** 只有带引号的强 ETag 才能用于 If-Match；`W/"..."` 一律当作没有。 */
         internal fun strongETag(value: String): String {
             val trimmed = value.trim()
-            if (trimmed.isEmpty() || trimmed.startsWith("W/", ignoreCase = true)) return ""
+            if (!Regex("\"[!#-~\\u0080-\\u00ff]*\"").matches(trimmed)) return ""
             return trimmed
         }
 
@@ -142,4 +144,26 @@ class WebDavSyncTransport(
         internal fun sameContent(first: ByteArray, second: ByteArray): Boolean =
             first.size == second.size && MessageDigest.isEqual(first, second)
     }
+
+    private fun archiveProtectionFailure(): String? {
+        val response = http.execute("GET", buildUrl(SYNC_ARCHIVE_MANIFEST_FILE_NAME), headers = headers())
+            ?: return "无法检查远端同步协议，已停止同步"
+        return when {
+            response.status == 404 -> null
+            response.status in 200..299 -> UNSUPPORTED_ARCHIVE_MESSAGE
+            else -> "无法检查远端同步协议（HTTP ${response.status}），已停止同步"
+        }
+    }
+}
+
+/** WebDAV 允许用户自建的 HTTP 服务，但禁止凭据嵌入 URL、查询串及非 HTTP 协议。 */
+internal fun validatedWebDavUrl(value: String): String {
+    val uri = java.net.URI(value.trim())
+    require(uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrBlank()) {
+        "WebDAV 地址必须是有效的 HTTP 或 HTTPS URL"
+    }
+    require(uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null) {
+        "WebDAV 地址不能包含账号、查询参数或片段"
+    }
+    return uri.toASCIIString()
 }

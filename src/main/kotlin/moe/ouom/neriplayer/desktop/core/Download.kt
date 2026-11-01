@@ -88,12 +88,14 @@ class DownloadCatalog(catalogFile: File = AppDirs.downloadCatalogFile) {
     private fun persist(snapshot: Map<String, DownloadedSong> = _items.value) =
         store.save(snapshot.values.toList())
 
+    @Synchronized
     fun record(entry: DownloadedSong) {
         // 多个下载同时完成时，读-改-写会互相覆盖，把刚下好的记录弄丢
         val updated = _items.updateAndGet { current -> current + (entry.songKey to entry) }
         persist(updated)
     }
 
+    @Synchronized
     fun remove(songKey: String) {
         val updated = _items.updateAndGet { current -> current - songKey }
         persist(updated)
@@ -137,9 +139,10 @@ class DownloadManager(
     }
 
     /** 入队下载；已在本地或已在队列中的歌曲会被跳过。 */
+    @Synchronized
     fun enqueue(songs: List<Song>, showMessage: ((String) -> Unit)? = null): Int {
         val existing = _tasks.value.mapTo(HashSet()) { it.song.key }
-        val added = songs.filter { song ->
+        val added = songs.distinctBy { it.key }.filter { song ->
             song.source != MediaSource.LOCAL && song.key !in existing && !catalog.contains(song.key)
         }
         if (added.isEmpty()) {
@@ -155,6 +158,7 @@ class DownloadManager(
         return added.size
     }
 
+    @Synchronized
     fun cancel(taskId: String) {
         canceled += taskId
         mutateTasks { task ->
@@ -166,11 +170,13 @@ class DownloadManager(
         }
     }
 
+    @Synchronized
     fun retry(taskId: String) {
-        canceled.remove(taskId)
+        // 新尝试使用新身份：旧下载即使仍在退出，也不能被本次 retry「取消取消」。
         mutateTasks { task ->
             if (task.id == taskId && task.state in setOf(DownloadState.FAILED, DownloadState.CANCELED)) {
-                task.copy(state = DownloadState.QUEUED, error = null, downloadedBytes = 0L)
+                task.copy(id = UUID.randomUUID().toString(), state = DownloadState.QUEUED,
+                    error = null, downloadedBytes = 0L, totalBytes = -1L, filePath = null)
             } else {
                 task
             }
@@ -184,6 +190,7 @@ class DownloadManager(
         }
     }
 
+    @Synchronized
     fun clearAll() {
         _tasks.value.filter { it.state in setOf(DownloadState.QUEUED, DownloadState.RUNNING) }
             .forEach { cancel(it.id) }
@@ -194,7 +201,7 @@ class DownloadManager(
     fun deleteDownload(songKey: String): Boolean {
         val entry = catalog.items.value[songKey] ?: return false
         val deleted = runCatching { File(entry.filePath).delete() }.getOrDefault(false)
-        catalog.remove(songKey)
+        if (deleted || !File(entry.filePath).exists()) catalog.remove(songKey)
         return deleted
     }
 
@@ -222,23 +229,31 @@ class DownloadManager(
                         continue
                     }
                     queued.take(slots).forEach { task ->
-                        markRunning(task.id)
-                        scope.launch { runTask(task) }
+                        if (!markRunning(task.id)) return@forEach
+                        scope.launch(Dispatchers.IO) {
+                            try { runTask(task) }
+                            catch (cancelled: kotlinx.coroutines.CancellationException) { cancel(task.id); throw cancelled }
+                            catch (error: Exception) { fail(task.id, error.message ?: "下载失败") }
+                            finally { canceled.remove(task.id); updateActiveCount(); startWorkers() }
+                        }
                     }
                     kotlinx.coroutines.delay(200)
                 }
             } finally {
                 running.set(false)
                 updateActiveCount()
+                if (_tasks.value.any { it.state == DownloadState.QUEUED }) startWorkers()
             }
         }
     }
 
-    private fun markRunning(taskId: String) {
+    private fun markRunning(taskId: String): Boolean = synchronized(this) {
+        if (taskId in canceled || _tasks.value.none { it.id == taskId && it.state == DownloadState.QUEUED }) return false
         mutateTasks { task ->
             if (task.id == taskId) task.copy(state = DownloadState.RUNNING) else task
         }
         updateActiveCount()
+        true
     }
 
     private fun updateActiveCount() {
@@ -248,6 +263,7 @@ class DownloadManager(
     }
 
     private suspend fun runTask(task: DownloadTask) {
+        if (task.id in canceled) return
         val song = task.song
         val input = runCatching {
             online.resolvePlayback(song, settings.current.downloadQuality)
@@ -256,17 +272,24 @@ class DownloadManager(
             fail(task.id, "无法获取播放地址")
             return
         }
-        val target = buildTargetFile(song, input!!.url)
+        val requested = buildTargetFile(song, input.url)
+        // 保留用户已有文件；新任务拥有独立文件，取消/重试也不会互相覆盖。
+        val target = if (requested.exists()) File(requested.parentFile,
+            "${requested.nameWithoutExtension}-${task.id.take(8)}.${requested.extension}") else requested
         // 先写 .part 再原子改名：中断/断网只会留下半截临时文件，不会让截断的音频被扫描进曲库
-        val part = File(target.parentFile, "${target.name}.part")
+        val part = File(target.parentFile, "${target.name}.${task.id}.part")
         var expectedTotal = 0L
         var lastError: String? = null
+        var lastProgressAt = 0L
         val ok = runCatching {
-            online.httpService.downloadToFile(input.url!!, input.headers, part) { downloaded, total ->
+            online.httpService.downloadToFile(input.url, input.headers, part, isCanceled = { task.id in canceled }) { downloaded, total ->
                 if (canceled.contains(task.id)) throw DownloadCanceledException()
                 if (total > 0) expectedTotal = total
+                val now = System.nanoTime()
+                if (now - lastProgressAt < 100_000_000L && downloaded != total) return@downloadToFile
+                lastProgressAt = now
                 mutateTasks { item ->
-                    if (item.id == task.id) {
+                    if (item.id == task.id && item.state == DownloadState.RUNNING) {
                         item.copy(
                             downloadedBytes = downloaded,
                             totalBytes = if (total > 0) total else item.totalBytes,
@@ -321,37 +344,45 @@ class DownloadManager(
         }
 
         val metadata = writeMetadata(target, song)
-        println(
-            "[download] 元数据写入：标签=${metadata.tags.propertyWritten} 内嵌封面=${metadata.tags.coverWritten} " +
-                "歌词=${metadata.tags.lyricWritten} 封面文件=${metadata.coverFile?.name ?: "无"}"
-        )
-
-        val size = target.length()
-        catalog.record(
-            DownloadedSong(
-                songKey = song.key,
-                filePath = target.absolutePath,
-                title = song.displayName(),
-                artist = song.artist,
-                album = song.album,
-                durationMs = song.durationMs,
-                artworkUrl = song.artworkUrl,
-                artworkPath = metadata.coverFile?.absolutePath,
-                lyricsPath = metadata.lyricFile?.absolutePath,
-                source = song.source.name,
-                sizeBytes = size,
-                downloadedAt = System.currentTimeMillis(),
-            )
-        )
-        mutateTasks {
-            if (it.id == task.id) {
-                it.copy(state = DownloadState.DONE, filePath = target.absolutePath, downloadedBytes = size, totalBytes = size)
-            } else {
-                it
+        synchronized(this) {
+            if (task.id in canceled || _tasks.value.none { it.id == task.id && it.state == DownloadState.RUNNING }) {
+                target.delete()
+                metadata.coverFile?.delete()
+                metadata.lyricFile?.delete()
+                return
             }
+            println(
+                "[download] 元数据写入：标签=${metadata.tags.propertyWritten} 内嵌封面=${metadata.tags.coverWritten} " +
+                    "歌词=${metadata.tags.lyricWritten} 封面文件=${metadata.coverFile?.name ?: "无"}"
+            )
+
+            val size = target.length()
+            catalog.record(
+                DownloadedSong(
+                    songKey = song.key,
+                    filePath = target.absolutePath,
+                    title = song.displayName(),
+                    artist = song.artist,
+                    album = song.album,
+                    durationMs = song.durationMs,
+                    artworkUrl = song.artworkUrl,
+                    artworkPath = metadata.coverFile?.absolutePath,
+                    lyricsPath = metadata.lyricFile?.absolutePath,
+                    source = song.source.name,
+                    sizeBytes = size,
+                    downloadedAt = System.currentTimeMillis(),
+                )
+            )
+            mutateTasks {
+                if (it.id == task.id) {
+                    it.copy(state = DownloadState.DONE, filePath = target.absolutePath, downloadedBytes = size, totalBytes = size)
+                } else {
+                    it
+                }
+            }
+            updateActiveCount()
+            println("[download] 完成：${song.displayName()} → ${target.absolutePath} (${size / 1024} KB)")
         }
-        updateActiveCount()
-        println("[download] 完成：${song.displayName()} → ${target.absolutePath} (${size / 1024} KB)")
     }
 
     /**
@@ -411,7 +442,8 @@ class DownloadManager(
 
     private fun fail(taskId: String, message: String) {
         mutateTasks { task ->
-            if (task.id == taskId) task.copy(state = DownloadState.FAILED, error = message) else task
+            if (task.id == taskId && task.state == DownloadState.RUNNING && taskId !in canceled)
+                task.copy(state = DownloadState.FAILED, error = message) else task
         }
         updateActiveCount()
         println("[download] 失败：$message")
@@ -423,7 +455,9 @@ class DownloadManager(
         val baseName = listOf(song.artistText(), song.displayName())
             .filter { it.isNotBlank() }
             .joinToString(" - ")
-        return File(downloadDirectory(), "${sanitizeFileName(baseName)}.$extension")
+        val identity = java.security.MessageDigest.getInstance("SHA-256").digest(song.key.toByteArray())
+            .take(6).joinToString("") { "%02x".format(it) }
+        return File(downloadDirectory(), "${sanitizeFileName(baseName).take(90)}-$identity.$extension")
     }
 
     private fun extensionFor(song: Song, url: String): String {
@@ -451,7 +485,9 @@ fun sanitizeFileName(name: String): String {
         if (char in "\\/:*?\"<>|\u0000" || char.code < 32) '_' else char
     }.joinToString("").trim().trim('.')
     val collapsed = cleaned.replace(Regex("\\s+"), " ")
-    return collapsed.take(120).ifBlank { "unknown" }
+    val safe = collapsed.take(120).trimEnd(' ', '.').ifBlank { "unknown" }
+    // Windows 的设备名即使带扩展名也不是普通文件。
+    return if (Regex("(?i)^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\\..*)?$").matches(safe)) "_$safe" else safe
 }
 
 /** 内部用：下载被用户取消。 */

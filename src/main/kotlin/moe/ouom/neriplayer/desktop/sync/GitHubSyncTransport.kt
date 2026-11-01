@@ -136,14 +136,19 @@ class GitHubSyncTransport(
         val branch = repoDefaultBranch(owner, repo)
             ?: return RemoteSyncRead.Failed("无法读取仓库信息（Token 失效或没有权限）")
         // 新建仓库还没有任何 commit 时读不到 HEAD：这是「远端没有数据」，不是失败
-        val head = branchHead(owner, repo, branch) ?: return RemoteSyncRead.Missing
+        val head = branchHead(owner, repo, branch)
+            ?: return RemoteSyncRead.Failed("无法确认远端分支状态，已停止同步；空仓库请先创建初始提交")
+        val archive = http.execute("GET", api("repos/$owner/$repo/contents/$SYNC_ARCHIVE_MANIFEST_FILE_NAME?ref=$head"), headers = headers())
+            ?: return RemoteSyncRead.Failed("无法检查远端同步协议")
+        if (archive.status in 200..299) return RemoteSyncRead.Failed(UNSUPPORTED_ARCHIVE_MESSAGE)
+        if (archive.status != 404) return RemoteSyncRead.Failed("无法检查远端同步协议（HTTP ${archive.status}）")
         val candidates = listOf(SyncDataSerializer.fileNameFor(useDataSaver)) +
             SyncDataSerializer.readFallbackFileNames(useDataSaver)
         var failure: String? = null
         candidates.forEach { path ->
             val response = http.execute(
                 "GET",
-                api("repos/$owner/$repo/contents/$path?ref=$branch"),
+                api("repos/$owner/$repo/contents/$path?ref=$head"),
                 headers = headers(mapOf("Accept" to "application/vnd.github.raw")),
             )
             when {

@@ -216,7 +216,9 @@ fun NowPlayingScreen(
                     if (wide) {
                         Row(Modifier.fillMaxSize()) {
                             Column(
-                                modifier = Modifier.weight(1f).fillMaxHeight().padding(24.dp),
+                                // 小高度 / 高 DPI 时不压扁播放按钮，也不裁掉队列等次级操作。
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                                    .verticalScroll(rememberScrollState()).padding(24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center,
                             ) {
@@ -260,7 +262,7 @@ fun NowPlayingScreen(
                         }
                     } else {
                         Column(
-                            modifier = Modifier.fillMaxSize().padding(20.dp),
+                            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             PlayerCore(

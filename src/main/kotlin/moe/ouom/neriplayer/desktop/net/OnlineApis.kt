@@ -648,13 +648,49 @@ class BiliApi(private val http: HttpService) {
     }
 
     fun videoPages(bvid: String): List<Pair<String, String>> {
-        val text = http.get("https://api.bilibili.com/x/player/pagelist?bvid=$bvid", headers) ?: return emptyList()
+        val text = http.get("https://api.bilibili.com/x/player/pagelist?${videoIdParam(bvid)}", headers) ?: return emptyList()
         val root = NeriJsonParser.parse(text).asObject() ?: return emptyList()
         val data = root.array("data") ?: return emptyList()
         return data.objects().mapNotNull { item ->
             val cid = item.long("cid")?.toString() ?: return@mapNotNull null
             cid to cleanBiliText(item.str("part"))
         }
+    }
+
+    private fun videoIdParam(id: String): String =
+        if (id.removePrefix("av").all(Char::isDigit)) "aid=${urlEncode(id.removePrefix("av"))}"
+        else "bvid=${urlEncode(id)}"
+
+    fun subtitleTracks(song: Song): List<BiliSubtitleTrack> {
+        if (http.cookiesFor("api.bilibili.com")["SESSDATA"].isNullOrBlank()) return emptyList()
+        val video = song.remoteId?.takeIf { it.isNotBlank() } ?: return emptyList()
+        val cid = song.extraId?.takeIf { it.isNotBlank() } ?: videoPages(video).firstOrNull()?.first ?: return emptyList()
+        val id = videoIdParam(video).split('=', limit = 2)
+        val root = wbiRequest("https://api.bilibili.com/x/player/wbi/v2", mapOf(id[0] to video.removePrefix("av"), "cid" to cid))
+            ?: return emptyList()
+        if (root.int("code") != 0) return emptyList()
+        return parseBiliSubtitleTracks(root.obj("data")?.obj("subtitle")?.toString().orEmpty())
+    }
+
+    fun subtitleLyrics(song: Song, settings: BiliSubtitleSettings): LyricQueryResult? {
+        if (!settings.enabled) return null
+        val tracks = subtitleTracks(song)
+        val referer = "https://www.bilibili.com/video/${song.remoteId.orEmpty()}"
+        fun load(track: BiliSubtitleTrack) = parseBiliSubtitleLines(
+            http.get(track.url, mapOf("Referer" to referer)).orEmpty(),
+        )
+        for (track in subtitleCandidates(tracks, settings)) {
+            val lines = load(track)
+            if (lines.isEmpty()) continue
+            val translation = translatedSubtitleTrack(track, tracks, settings.aiFallback)?.let(::load).orEmpty()
+            return LyricQueryResult(
+                raw = lyricsToLrc(lines),
+                source = "哔哩哔哩 CC（${track.label}）",
+                timedLines = mergeSubtitleTranslation(lines, translation),
+                isBiliCc = true,
+            )
+        }
+        return null
     }
 
     /** bvid → aid：评论接口要的是数字 aid，不是 bvid。 */

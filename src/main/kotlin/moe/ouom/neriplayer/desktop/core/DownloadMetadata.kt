@@ -37,7 +37,7 @@ object DownloadMetadataWriter {
         // jaudiotagger 是原地重写标签：直接在用户唯一的音频文件上 commit，
         // 中途崩溃/断电就会把文件写坏。这里先复制一份改副本，校验能读回后再原子替换。
         // 注意副本必须保留原扩展名，否则 jaudiotagger 认不出容器格式。
-        val temp = File(file.parentFile, "${file.nameWithoutExtension}.neri-tagtmp.${file.extension}")
+        val temp = File(file.parentFile, "${file.nameWithoutExtension}.${java.util.UUID.randomUUID()}.neri-tagtmp.${file.extension}")
         return runCatching {
             file.copyTo(temp, overwrite = true)
             val audioFile = AudioFileIO.read(temp)
@@ -65,7 +65,14 @@ object DownloadMetadataWriter {
             audioFile.commit()
             // 读回校验：标签确实能重新解析，才敢用它替换原文件
             val verify = AudioFileIO.read(temp)
-            require(verify.tag != null) { "写入后无法读回标签" }
+            val verifiedTag = requireNotNull(verify.tag) { "写入后无法读回标签" }
+            listOf(FieldKey.TITLE to title, FieldKey.ARTIST to artist, FieldKey.ALBUM to album).forEach { (key, value) ->
+                require(value.isBlank() || verifiedTag.getFirst(key) == value) { "标签写入校验失败：$key" }
+            }
+            require(!lyricWritten || verifiedTag.getFirst(FieldKey.LYRICS) == lyrics) { "歌词写入校验失败" }
+            require(!coverWritten || verifiedTag.firstArtwork?.binaryData?.contentEquals(coverBytes) == true) {
+                "封面写入校验失败"
+            }
             moveIntoPlace(temp, file)
             Result(
                 propertyWritten = title.isNotBlank() || artist.isNotBlank() || album.isNotBlank(),

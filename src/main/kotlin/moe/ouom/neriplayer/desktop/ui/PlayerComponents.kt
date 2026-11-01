@@ -426,6 +426,16 @@ fun QueuePanel(
     onMoveIndex: (Int, Int) -> Unit,
     onClear: () -> Unit,
 ) {
+    var confirmClear by remember { mutableStateOf(false) }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("清空播放队列？") },
+            text = { Text("将移除队列中的 ${queue.size} 首歌曲并停止播放，不会删除音乐文件或歌单。") },
+            confirmButton = { TextButton(onClick = { confirmClear = false; onClear() }) { Text("清空队列") } },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } },
+        )
+    }
     OverlayPanel(title = "播放队列（${queue.size} 首）", onClose = onClose) {
         // 队列里可能有重复歌曲：key 用身份，重复时才退回下标，避免整段列表重建
         val keyCounts = remember(queue) { queue.groupingBy { it.key }.eachCount() }
@@ -543,7 +553,7 @@ fun QueuePanel(
                 modifier = Modifier.fillMaxWidth().padding(14.dp),
                 horizontalArrangement = Arrangement.End,
             ) {
-                TextButton(onClick = onClear) { Text("清空队列") }
+                TextButton(onClick = { confirmClear = true }) { Text("清空队列") }
             }
         }
     }

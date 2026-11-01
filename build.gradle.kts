@@ -12,7 +12,7 @@ plugins {
 
 group = "moe.ouom.neriplayer"
 // Windows 版自己的版本号（唯一来源）：设置页「关于」里的版本由下面生成的 BuildInfo 提供
-version = "1.13.1"
+version = "1.14.0"
 
 // 构建时生成 BuildInfo.VERSION：界面里不再手写版本号，避免出现「装的是 1.8、显示的是 1.6」
 val generateBuildInfo by tasks.registering {
@@ -67,6 +67,18 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.17.0")
     implementation("net.java.dev.jna:jna-platform:5.17.0")
     implementation("com.github.luben:zstd-jni:1.5.6-4")
+    testImplementation(kotlin("test-junit"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+}
+
+tasks.test {
+    systemProperty("java.awt.headless", "true")
+    // 测试不读取或改写真实账号、曲库及设置。
+    val home = layout.buildDirectory.dir("test-home").get().asFile
+    environment("NERIPLAYER_CONFIG_HOME", File(home, "config").absolutePath)
+    environment("NERIPLAYER_DATA_HOME", File(home, "data").absolutePath)
+    environment("NERIPLAYER_CACHE_HOME", File(home, "cache").absolutePath)
+    testLogging { events("passed", "skipped", "failed") }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +247,7 @@ compose.desktop {
             // （那条路径不需要 WiX，产出 app\NeriPlayer\NeriPlayer.exe）。
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "NeriPlayer"
-            packageVersion = "1.13.1"
+            packageVersion = project.version.toString()
             // 注意：下面这些是交给 jpackage 的安装包元数据，必须保持 ASCII。
             // jpackage 读取参数文件用的是系统默认字符集（JDK 17 在中文 Windows 上是 GBK），
             // 而 Compose 插件写入的是 UTF-8 —— description 里一旦有中文就会乱码，

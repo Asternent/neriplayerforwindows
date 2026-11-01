@@ -61,6 +61,9 @@ data class LyricQueryResult(
     val wordRaw: String? = null,
     /** [wordRaw] 的格式。 */
     val wordFormat: LyricFormat = LyricFormat.YRC,
+    /** CC 字幕原生时间轴：保留结束时间与跨轨翻译，不经 LRC 再解析。 */
+    val timedLines: List<LyricLine> = emptyList(),
+    val isBiliCc: Boolean = false,
 )
 
 /**

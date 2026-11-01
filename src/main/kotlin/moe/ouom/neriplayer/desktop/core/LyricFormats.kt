@@ -40,8 +40,9 @@ object YrcParser {
     private val segmentRegex = Regex("""\((\d{1,19}),\s*(\d{1,19}),\s*[-\d]{1,20}\)([^()\n\r]*)""")
 
     fun parse(raw: String, extraOffsetMs: Long = 0L): List<LyricLine> {
-        if (raw.isBlank()) return emptyList()
-        val result = ArrayList<LyricLine>()
+        if (raw.isBlank() || raw.length > 2_000_000) return emptyList()
+        // 混合时间轴也保留普通 / 增强 LRC 行；不能因为出现一行 YRC 就丢掉其余正文。
+        val result = ArrayList(LrcParser.parse(raw, extraOffsetMs))
         raw.lineSequence().forEach { rawLine ->
             val line = rawLine.trim()
             if (!line.startsWith("[")) return@forEach
@@ -57,7 +58,7 @@ object YrcParser {
                 result += LyricLine(
                     timeMs = shiftedStart,
                     text = text,
-                    endMs = shift(start + duration, extraOffsetMs).coerceAtLeast(shiftedStart),
+                    endMs = shift(safeAdd(start, duration), extraOffsetMs).coerceAtLeast(shiftedStart),
                 )
                 return@forEach
             }
@@ -73,7 +74,7 @@ object YrcParser {
                 words += LyricWord(
                     text = text,
                     startMs = shiftedStart,
-                    endMs = shift(wordStart + wordDuration, extraOffsetMs).coerceAtLeast(shiftedStart),
+                    endMs = shift(safeAdd(wordStart, wordDuration), extraOffsetMs).coerceAtLeast(shiftedStart),
                 )
                 builder.append(text)
             }
@@ -88,10 +89,17 @@ object YrcParser {
             )
         }
         // yrc 本身是有序的，但翻译行偶尔乱序；排序是稳定排序，不会打乱同时间戳的先后
-        return result.sortedBy { it.timeMs }
+        return result.groupBy { it.timeMs to it.text }.values.map { group -> group.maxBy { it.words.size } }
+            .sortedBy { it.timeMs }
     }
 
-    private fun shift(value: Long, offsetMs: Long): Long = (value - offsetMs).coerceAtLeast(0L)
+    private fun safeAdd(value: Long, delta: Long): Long =
+        if (delta > Long.MAX_VALUE - value) Long.MAX_VALUE else value + delta
+
+    private fun shift(value: Long, offsetMs: Long): Long {
+        val offset = offsetMs.coerceIn(-86_400_000L, 86_400_000L)
+        return if (offset < 0) safeAdd(value, -offset) else (value - offset).coerceAtLeast(0L)
+    }
 }
 
 /** TTML 解析结果：原文行（带逐字）+ 翻译行 + 音译行。 */

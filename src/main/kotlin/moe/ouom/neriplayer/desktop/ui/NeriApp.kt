@@ -90,7 +90,9 @@ fun NeriThemeForSettings(
         isDark = isDark,
         paletteStyle = settings.paletteStyle,
         colorSpec = settings.colorSpec,
-        content = content,
+        content = {
+            CompositionLocalProvider(LocalDownloadCatalog provides container.downloadCatalog, content = content)
+        },
     )
 }
 

@@ -19,7 +19,10 @@ data class NeteaseHomeData(
 )
 
 /** 在线音源聚合：搜索 / 播放地址 / 歌词 / 首页推荐。 */
-class OnlineRepository(private val http: HttpService = HttpService()) {
+class OnlineRepository(
+    private val http: HttpService = HttpService(),
+    private val subtitleSettings: () -> BiliSubtitleSettings = { BiliSubtitleSettings() },
+) {
 
     /** 暴露给账号仓库复用同一份 Cookie 与连接设置。 */
     val httpService: HttpService get() = http
@@ -111,7 +114,7 @@ class OnlineRepository(private val http: HttpService = HttpService()) {
     suspend fun lyrics(song: Song): LyricQueryResult? = withContext(Dispatchers.IO) {
         when (song.source) {
             MediaSource.NETEASE -> song.remoteId?.let { netease.lyric(it) }
-            MediaSource.BILIBILI -> null
+            MediaSource.BILIBILI -> bilibili.subtitleLyrics(song, subtitleSettings())
             MediaSource.LOCAL -> localLyricFallback(song)
             MediaSource.YOUTUBE -> null
         }

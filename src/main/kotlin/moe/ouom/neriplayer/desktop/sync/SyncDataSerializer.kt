@@ -3,6 +3,7 @@
 package moe.ouom.neriplayer.desktop.sync
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.protobuf.ProtoBuf
 import java.io.ByteArrayOutputStream
 import java.util.Base64
@@ -10,9 +11,9 @@ import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
 /**
- * 与手机端完全一致的三通道序列化：
+ * 旧版手机端的三通道序列化（不支持归档协议 3/4）：
  * - 普通通道：UTF-8 JSON 文本（backup.json）
- * - 省流通道：原始 GZIP(ProtoBuf) 字节（backup-raw.bin，以 0x1F 0x8B 开头）
+ * - 省流通道：原始 ZSTD(ProtoBuf) 字节（也能读取旧 GZIP 格式）
  * - 兼容旧版：Base64(GZIP(ProtoBuf)) 文本（backup.bin）
  */
 object SyncDataSerializer {
@@ -72,7 +73,13 @@ object SyncDataSerializer {
         val text = content.decodeToString().trimStart('\uFEFF', ' ', '\n', '\r', '\t')
         // 2. JSON 文本
         if (text.startsWith("{")) {
-            return decodeOrThrow("JSON") { json.decodeFromString(SyncData.serializer(), text) }
+            return decodeOrThrow("JSON") {
+                val objectValue = json.parseToJsonElement(text) as? JsonObject ?: error("同步数据不是对象")
+                require(objectValue.keys.any { it in setOf("version", "playlists", "favoritePlaylists", "recentPlays", "playbackStats") }) {
+                    "文件不包含可识别的同步数据，拒绝当作空备份"
+                }
+                json.decodeFromString(SyncData.serializer(), text)
+            }
         }
         // 3. 旧版 Base64(GZIP(ProtoBuf))
         return decodeOrThrow("Base64") {
@@ -82,7 +89,11 @@ object SyncDataSerializer {
 
     private inline fun decodeOrThrow(format: String, block: () -> SyncData): SyncData =
         try {
-            block()
+            block().also { data ->
+                require(data.version.substringBefore('.').toIntOrNull() in 1..2) {
+                    "不支持同步格式 ${data.version}，拒绝回写"
+                }
+            }
         } catch (error: Exception) {
             throw IllegalStateException("同步文件（$format）无法解析：${error.message}", error)
         }

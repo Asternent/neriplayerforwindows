@@ -14,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import moe.ouom.neriplayer.desktop.net.OnlineRepository
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -39,9 +40,8 @@ class PlayerManager(
     private val online: OnlineRepository,
     private val scope: CoroutineScope,
     private val downloads: DownloadCatalog,
+    val engine: AudioEngine = createAudioEngine(),
 ) {
-
-    val engine: AudioEngine = createAudioEngine()
 
     private val _queue = MutableStateFlow<List<Song>>(emptyList())
     val queue: StateFlow<List<Song>> = _queue.asStateFlow()
@@ -103,6 +103,10 @@ class PlayerManager(
     private var sleepTimerJob: Job? = null
     /** 当前这首歌的「解析地址 + 打开引擎」任务；切歌时取消，避免旧任务把新歌顶掉。 */
     private var loadJob: Job? = null
+    private var lyricsJob: Job? = null
+    private val lyricRequest = java.util.concurrent.atomic.AtomicLong()
+    private val playbackRequest = java.util.concurrent.atomic.AtomicLong()
+    private val playbackLock = Any()
     private val resolveMutex = Mutex()
     private val resolvedCache = ConcurrentHashMap<String, AudioInput>()
     private val seedCache = ConcurrentHashMap<String, String>()
@@ -185,13 +189,15 @@ class PlayerManager(
             playCurrent()
         } else {
             _currentSong.value = songs[_currentIndex.value]
+            persistQueueState()
         }
     }
 
     fun playSongNow(song: Song, queue: List<Song>? = null) {
         val targetQueue = (queue ?: _queue.value).ifEmpty { listOf(song) }
-        val index = targetQueue.indexOfFirst { it.key == song.key }.takeIf { it >= 0 } ?: 0
-        setQueue(targetQueue, index, autoPlay = true)
+        val index = targetQueue.indexOfFirst { it.key == song.key }
+        if (index < 0) setQueue(listOf(song) + targetQueue, 0, autoPlay = true)
+        else setQueue(targetQueue, index, autoPlay = true)
     }
 
     fun enqueueNext(songs: List<Song>) {
@@ -206,6 +212,7 @@ class PlayerManager(
         list.addAll(insertAt, songs)
         _queue.value = list
         rebuildShuffleOrder(_currentIndex.value)
+        persistQueueState()
         scope.launch { _messages.emit("已添加到下一首播放") }
     }
 
@@ -217,6 +224,7 @@ class PlayerManager(
         }
         _queue.value = _queue.value + songs
         rebuildShuffleOrder(_currentIndex.value)
+        persistQueueState()
         scope.launch { _messages.emit("已添加到播放队列") }
     }
 
@@ -239,26 +247,38 @@ class PlayerManager(
             index < _currentIndex.value -> _currentIndex.value -= 1
         }
         rebuildShuffleOrder(_currentIndex.value)
+        persistQueueState()
     }
 
     fun moveInQueue(from: Int, to: Int) {
         val list = _queue.value.toMutableList()
         if (from !in list.indices || to !in list.indices || from == to) return
-        val playing = _currentSong.value
+        val current = _currentIndex.value
         val item = list.removeAt(from)
         list.add(to, item)
         _queue.value = list
-        _currentIndex.value = playing?.let { song -> list.indexOfFirst { it.key == song.key } } ?: -1
+        // 同一首歌可以在队列中出现多次，必须跟踪条目下标而不是 first key。
+        _currentIndex.value = when {
+            current == from -> to
+            from < current && to >= current -> current - 1
+            from > current && to <= current -> current + 1
+            else -> current
+        }
         rebuildShuffleOrder(_currentIndex.value)
+        persistQueueState()
     }
 
     fun clearQueue() {
         stopPlaybackInternal()
+        lyricRequest.incrementAndGet()
+        lyricsJob?.cancel()
+        _lyricsLoading.value = false
         _queue.value = emptyList()
         _currentIndex.value = -1
         _currentSong.value = null
         _state.value = PlaybackState.IDLE
         _lyrics.value = Lyrics()
+        persistQueueState()
     }
 
     fun play() {
@@ -283,11 +303,17 @@ class PlayerManager(
     }
 
     fun pause() {
-        flushListeningTime()
-        // flush 之后 state 还是 PLAYING，会把它重新置为「现在」；暂停期间的时间不能算进收听时长
-        playbackStartedAt = 0L
-        engine.pause()
-        _state.value = PlaybackState.PAUSED
+        synchronized(playbackLock) {
+            if (_state.value == PlaybackState.PREPARING) {
+                playbackRequest.incrementAndGet()
+                loadJob?.cancel()
+            }
+            flushListeningTime()
+            // flush 之后 state 还是 PLAYING，会把它重新置为「现在」；暂停期间的时间不能算进收听时长
+            playbackStartedAt = 0L
+            engine.pause()
+            _state.value = PlaybackState.PAUSED
+        }
     }
 
     fun togglePlayPause() {
@@ -410,53 +436,65 @@ class PlayerManager(
     // ---------------- 播放核心 ----------------
 
     private fun playCurrent() {
-        val queue = _queue.value
-        val index = _currentIndex.value
-        if (index !in queue.indices) return
-        val song = queue[index]
-        _currentSong.value = song
-        _state.value = PlaybackState.PREPARING
-        _buffering.value = true
-        engine.prepare(song.durationMs)
-        _lyrics.value = lyricsRepository.cached(song) ?: Lyrics()
-        // 上一次切歌的解析可能还没结束：取消它，否则它会在新歌开始后再把旧歌打开
-        loadJob?.cancel()
-        scope.launch { loadLyricsFor(song) }
-        scope.launch { updateCoverSeed(song) }
-        loadJob = scope.launch {
-            val input = resolveInput(song)
-            // 解析期间用户可能又切歌 / 清空队列 / 停止播放，这里必须重新确认目标仍是当前歌曲
-            if (_currentSong.value?.key != song.key || !isActive) return@launch
-            if (input == null) {
-                resolvedCache.remove(song.key)
-                _state.value = PlaybackState.ERROR
-                _buffering.value = false
-                _messages.emit("无法获取播放地址，请稍后重试")
-                return@launch
+        synchronized(playbackLock) {
+            val queue = _queue.value
+            val index = _currentIndex.value
+            if (index !in queue.indices) return
+            val song = queue[index]
+            val request = playbackRequest.incrementAndGet()
+            loadJob?.cancel()
+            flushListeningTime()
+            playbackStartedAt = 0L
+            currentPlayingKey = null
+            _currentSong.value = song
+            _state.value = PlaybackState.PREPARING
+            _buffering.value = true
+            engine.prepare(song.durationMs)
+            _lyrics.value = lyricsRepository.cached(song) ?: Lyrics()
+            // 上一次切歌的解析可能还没结束：取消它，否则它会在新歌开始后再把旧歌打开
+            loadLyricsFor(song)
+            scope.launch { updateCoverSeed(song) }
+            loadJob = scope.launch {
+                val input = resolveInput(song)
+                // 解析期间用户可能又切歌 / 清空队列 / 停止播放，这里必须重新确认目标仍是当前歌曲
+                if (_currentSong.value?.key != song.key || !isActive) return@launch
+                if (input == null) {
+                    resolvedCache.remove(song.key)
+                    _state.value = PlaybackState.ERROR
+                    _buffering.value = false
+                    _messages.emit("无法获取播放地址，请稍后重试")
+                    return@launch
+                }
+                val duration = song.durationMs.takeIf { it > 0 }
+                    ?: FfmpegSupport.probeDurationMs(input)
+                ensureActive()
+                synchronized(playbackLock) {
+                    if (playbackRequest.get() != request || _currentSong.value?.key != song.key) return@launch
+                    engine.open(input, 0L, duration)
+                    engine.setVolume(_volume.value)
+                    if (engine.supportsEffects) {
+                        engine.setSpeed(_speed.value)
+                        engine.setPitch(_pitch.value)
+                        engine.setLoudness(_loudness.value)
+                        engine.setEqualizer(if (_equalizerEnabled.value) _equalizerBands.value else null)
+                    }
+                    engine.play()
+                    currentPlayingKey = song.key
+                    playbackStartedAt = System.currentTimeMillis()
+                    _state.value = PlaybackState.PLAYING
+                    history.record(song)
+                    stats.recordPlay(song)
+                    persistQueueState()
+                }
             }
-            val duration = song.durationMs.takeIf { it > 0 }
-                ?: FfmpegSupport.probeDurationMs(input)
-            engine.open(input, 0L, duration)
-            engine.setVolume(_volume.value)
-            if (engine.supportsEffects) {
-                engine.setSpeed(_speed.value)
-                engine.setPitch(_pitch.value)
-                engine.setLoudness(_loudness.value)
-                engine.setEqualizer(if (_equalizerEnabled.value) _equalizerBands.value else null)
-            }
-            engine.play()
-            currentPlayingKey = song.key
-            playbackStartedAt = System.currentTimeMillis()
-            _state.value = PlaybackState.PLAYING
-            history.record(song)
-            stats.recordPlay(song)
-            persistQueueState()
         }
     }
 
     private fun stopPlaybackInternal() {
+        playbackRequest.incrementAndGet()
+        loadJob?.cancel()
         flushListeningTime()
-        engine.release()
+        synchronized(playbackLock) { engine.release() }
         currentPlayingKey = null
         playbackStartedAt = 0L
     }
@@ -492,19 +530,28 @@ class PlayerManager(
         resolved
     }
 
-    private suspend fun loadLyricsFor(song: Song) {
+    private fun loadLyricsFor(song: Song) {
+        val request = lyricRequest.incrementAndGet()
+        lyricsJob?.cancel()
         _lyricsLoading.value = true
-        val loaded = lyricsRepository.load(song)
-        if (_currentSong.value?.key == song.key) {
-            _lyrics.value = loaded
+        lyricsJob = scope.launch {
+            try {
+                val loaded = lyricsRepository.load(song)
+                ensureActive()
+                if (lyricRequest.get() == request && _currentSong.value?.key == song.key) {
+                    // 空结果也必须发布：关闭字幕后不能继续显示之前的 CC 歌词。
+                    _lyrics.value = loaded
+                }
+            } finally {
+                if (lyricRequest.get() == request) _lyricsLoading.value = false
+            }
         }
-        _lyricsLoading.value = false
     }
 
     fun reloadLyrics() {
         val song = _currentSong.value ?: return
         lyricsRepository.invalidate(song)
-        scope.launch { loadLyricsFor(song) }
+        loadLyricsFor(song)
     }
 
     private suspend fun updateCoverSeed(song: Song) {
@@ -523,15 +570,15 @@ class PlayerManager(
     }
 
     private fun artworkBytes(song: Song): ByteArray? {
-        val path = song.artworkPath
+        val path = song.withDownloadedArtwork(downloads.items.value[song.key]).artworkPath
         if (!path.isNullOrBlank()) {
             val file = File(path)
-            if (file.isFile) return runCatching { file.readBytes() }.getOrNull()
+            readArtworkFile(file)?.let { return it }
         }
         val url = song.artworkUrl ?: return null
-        val cached = File(AppDirs.coverDir, song.key.replace(Regex("[^A-Za-z0-9]"), "_") + ".img")
-        if (cached.isFile) return runCatching { cached.readBytes() }.getOrNull()
-        val bytes = runCatching { java.net.URI(url).toURL().openStream().use { it.readBytes() } }.getOrNull() ?: return null
+        val cached = artworkCacheFile(url)
+        readArtworkFile(cached)?.let { return it }
+        val bytes = online.httpService.download(url) ?: return null
         runCatching { cached.writeBytes(bytes) }
         return bytes
     }

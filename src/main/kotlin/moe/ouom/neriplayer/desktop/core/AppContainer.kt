@@ -30,7 +30,13 @@ class AppContainer {
         onEntryRemoved = { song -> syncTombstones.recordRecentRemoved(song) },
     )
     val stats = StatsRepository(history)
-    val online = OnlineRepository()
+    val online = OnlineRepository(subtitleSettings = {
+        moe.ouom.neriplayer.desktop.net.BiliSubtitleSettings(
+            enabled = settings.current.biliCcLyricsEnabled,
+            preferredLanguage = settings.current.biliCcPreferredLanguage,
+            aiFallback = settings.current.biliCcAiFallback,
+        )
+    })
     val http: moe.ouom.neriplayer.desktop.net.HttpService get() = online.httpService
     val accounts = AccountRepository(online.httpService)
     val syncConfig = SyncConfigStore()
@@ -74,6 +80,7 @@ class AppContainer {
         preferredProvider = { song, source -> online.preferredLyrics(song, source) },
         preferredSource = { LyricSource.of(settings.current.lyricSourcePreference) },
         offsetMs = { source -> settings.current.lyricOffsetMs(source) },
+        biliCcOffsetMs = { settings.current.lyricOffsetBiliCcMs },
     )
     val player = PlayerManager(
         settings = settings,
@@ -128,7 +135,7 @@ class AppContainer {
         }
     }
 
-    private var localRevision = 0L
+    private val localRevision = java.util.concurrent.atomic.AtomicLong()
 
     /** 播放状态变化时同步给系统媒体控制；并按设置启停服务。 */
     private fun startMediaControlBridge() {
@@ -162,10 +169,10 @@ class AppContainer {
     /** 本地歌单 / 历史 / 统计变化后，若开启了自动同步则静默同步一次。 */
     private fun observeLocalChangesForAutoSync() {
         scope.launch {
-            // 歌单看条数即可；历史与统计要听「内容版本」，否则原地累加的播放记录永远不会触发自动同步
+            // 必须监听歌单内容：重命名、加减歌曲、排序都不会改变歌单条数。
             combine(playlists.playlists, history.revision, stats.revision) { p, h, s ->
-                Triple(p.size, h, s)
-            }.collect { localRevision += 1 }
+                Triple(p, h, s)
+            }.collect { localRevision.incrementAndGet() }
         }
         scope.launch {
             var lastSyncedRevision = -1L
@@ -175,14 +182,16 @@ class AppContainer {
                 if (!config.autoSync || !config.configured) continue
                 if (lastSyncedRevision < 0L) {
                     // 启动后的第一次循环只记录基线，避免刚打开就上传
-                    lastSyncedRevision = localRevision
+                    lastSyncedRevision = localRevision.get()
                     continue
                 }
-                if (localRevision == lastSyncedRevision) continue
+                val revision = localRevision.get()
+                if (revision == lastSyncedRevision) continue
                 // 手动同步正在进行时别插队：并发同步会互相覆盖本地数据
                 if (sync.state.value.running) continue
-                runCatching { sync.performSync() }
-                lastSyncedRevision = localRevision
+                val result = sync.performSync()
+                // 失败下次重试；同步期间新发生的编辑仍保持待同步状态。
+                if (result.success && !result.running) lastSyncedRevision = revision
             }
         }
     }

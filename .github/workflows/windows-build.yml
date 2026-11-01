@@ -1,5 +1,12 @@
 name: Windows Build
 
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [ main ]
@@ -12,6 +19,7 @@ jobs:
   build:
     name: Build (Windows)
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -25,6 +33,20 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Offline regression tests
+        shell: pwsh
+        run: .\gradlew.bat --no-daemon --console=plain check
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-test-results
+          path: |
+            build/reports/tests/test/
+            build/test-results/test/
+          if-no-files-found: warn
 
       - name: Build app image
         shell: pwsh

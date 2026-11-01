@@ -20,6 +20,9 @@ const val DISPLAY_ORDER_SONG_ORDER_VERSION = 1
 const val SYNC_JSON_FILE_NAME = "backup.json"
 const val SYNC_RAW_BINARY_FILE_NAME = "backup-raw.bin"
 const val SYNC_LEGACY_BINARY_FILE_NAME = "backup.bin"
+/** Android 归档协议 3/4 的入口；本客户端暂不支持其分片/因果合并，禁止回写旧通道。 */
+const val SYNC_ARCHIVE_MANIFEST_FILE_NAME = "neriplayer-sync-v3.manifest"
+const val UNSUPPORTED_ARCHIVE_MESSAGE = "远端已使用新版归档同步协议，当前 Windows 版暂不支持；已停止同步以保护数据。请使用独立同步目录/仓库，不要删除远端归档。"
 
 @Serializable
 enum class SyncAction {

@@ -246,6 +246,10 @@ data class AppSettings(
     val lyricOffsetLrclibMs: Long = 0L,
     val lyricOffsetKugouMs: Long = 0L,
     val lyricOffsetAmllMs: Long = 0L,
+    val lyricOffsetBiliCcMs: Long = 0L,
+    val biliCcLyricsEnabled: Boolean = true,
+    val biliCcPreferredLanguage: String = "",
+    val biliCcAiFallback: Boolean = true,
     /** 评论面板每页加载多少条。 */
     val commentPageSize: Int = 20,
     val coverShowsLyrics: Boolean = true,
@@ -322,8 +326,8 @@ data class AppSettings(
 )
 
 /** 设置仓库：内存 StateFlow + JSON 持久化。 */
-class SettingsRepository {
-    private val store = JsonFileStore(AppDirs.settingsFile, AppSettings.serializer()) { AppSettings() }
+class SettingsRepository(settingsFile: File = AppDirs.settingsFile) {
+    private val store = JsonFileStore(settingsFile, AppSettings.serializer()) { AppSettings() }
     private val _state = MutableStateFlow(loadDefaults())
     val state: StateFlow<AppSettings> = _state.asStateFlow()
 
@@ -335,7 +339,7 @@ class SettingsRepository {
     private var pendingSave: AppSettings? = null
 
     private fun loadDefaults(): AppSettings {
-        val loaded = store.load()
+        val loaded = store.load().normalizeLyricOffsets()
         // 注册表查询要起一个 reg.exe 子进程：只有真的需要猜默认曲库目录时才做
         if (loaded.musicFolders.isNotEmpty()) return loaded
         val defaultMusic = defaultMusicDirectory()
@@ -350,7 +354,7 @@ class SettingsRepository {
 
     fun update(transform: (AppSettings) -> AppSettings) {
         synchronized(writeLock) {
-            val next = transform(_state.value)
+            val next = transform(_state.value).normalizeLyricOffsets()
             _state.value = next
             scheduleSave(next)
         }
@@ -358,21 +362,21 @@ class SettingsRepository {
 
     fun replace(next: AppSettings) {
         synchronized(writeLock) {
-            _state.value = next
-            scheduleSave(next)
+            val normalized = next.normalizeLyricOffsets()
+            _state.value = normalized
+            scheduleSave(normalized)
         }
     }
 
     /** 立刻把未落盘的设置写下去：退出应用前必须调一次，否则最后一次改动会丢。 */
     fun flush() {
-        val value = synchronized(writeLock) {
+        synchronized(writeLock) {
             saveJob?.cancel()
             saveJob = null
             val latest = pendingSave ?: _state.value
             pendingSave = null
-            latest
+            store.save(latest)
         }
-        store.save(value)
     }
 
     private fun scheduleSave(value: AppSettings) {
@@ -380,13 +384,12 @@ class SettingsRepository {
         if (saveJob?.isActive == true) return
         saveJob = saveScope.launch {
             kotlinx.coroutines.delay(400)
-            val latest = synchronized(writeLock) {
+            synchronized(writeLock) {
                 val queued = pendingSave
                 pendingSave = null
                 saveJob = null
-                queued
-            } ?: return@launch
-            store.save(latest)
+                if (queued != null) store.save(queued)
+            }
         }
     }
 }

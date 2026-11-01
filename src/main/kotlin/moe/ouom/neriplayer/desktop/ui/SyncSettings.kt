@@ -124,14 +124,14 @@ fun SyncSettingsSection(
                 label = { Text("WebDAV") }
             )
         }
-        
+
         Spacer(Modifier.height(14.dp))
-        
+
         if (config.syncBackend == "WEBDAV") {
             var urlInput by remember(config.webdavUrl) { mutableStateOf(config.webdavUrl) }
             var userInput by remember(config.webdavUsername) { mutableStateOf(config.webdavUsername) }
             var passInput by remember(config.webdavPassword) { mutableStateOf(config.webdavPassword) }
-            
+
             Text("WebDAV 凭证", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(6.dp))
             OutlinedTextField(
@@ -141,6 +141,10 @@ fun SyncSettingsSection(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (urlInput.startsWith("http://", ignoreCase = true)) {
+                Text("警告：HTTP 不加密，账号密码与同步内容可能被网络中的第三方读取；建议使用 HTTPS。",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
@@ -153,7 +157,7 @@ fun SyncSettingsSection(
                 Spacer(Modifier.width(8.dp))
                 OutlinedTextField(
                     value = passInput,
-                    onValueChange = { passInput = it.trim() },
+                    onValueChange = { passInput = it },
                     label = { Text("密码") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
@@ -166,21 +170,28 @@ fun SyncSettingsSection(
                     enabled = urlInput.isNotBlank() && userInput.isNotBlank() && passInput.isNotBlank() && !verifying,
                     onClick = {
                         verifying = true
+                        val testedUrl = urlInput
+                        val testedUser = userInput
+                        val testedPassword = passInput
                         scope.launch {
-                            val transport = moe.ouom.neriplayer.desktop.sync.WebDavSyncTransport(
-                                container.http, urlInput, userInput, passInput
-                            )
-                            val ok = withContext(Dispatchers.IO) { transport.testConnection() }
-                            verifying = false
-                            if (ok) {
-                                container.syncConfig.update { 
-                                    it.copy(webdavUrl = urlInput, webdavUsername = userInput, webdavPassword = passInput) 
+                            try {
+                                val ok = withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        moe.ouom.neriplayer.desktop.sync.WebDavSyncTransport(
+                                            container.http, testedUrl, testedUser, testedPassword,
+                                        ).testConnection()
+                                    }.getOrDefault(false)
                                 }
-                                container.sync.refreshConfiguredState()
-                                showMessage("测试连接成功并已保存配置")
-                            } else {
-                                showMessage("测试连接失败，请检查地址或凭证")
-                            }
+                                if (ok) {
+                                    container.syncConfig.update {
+                                        it.copy(webdavUrl = testedUrl, webdavUsername = testedUser, webdavPassword = testedPassword)
+                                    }
+                                    container.sync.refreshConfiguredState()
+                                    showMessage("测试连接成功并已保存配置")
+                                } else {
+                                    showMessage("测试连接失败，请检查地址或凭证")
+                                }
+                            } finally { verifying = false }
                         }
                     }
                 ) { Text(if (verifying) "测试中…" else "测试连接与保存") }

@@ -18,8 +18,8 @@
 - Linux 桌面版（本项目的上游）→ [Asternent/NeriPlayerForLinux](https://github.com/Asternent/NeriPlayerForLinux)
 - **本仓库（Windows 版）→ 只面向 Windows**
 
-Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**（窗口标题与界面文案仍是 NeriPlayer），
-改动的只有与操作系统直接打交道的那几层：
+Kotlin 源码、Material 3 主题、页面与交互起源于 Linux 版，Windows 版现已独立演进（窗口标题与界面文案仍是 NeriPlayer），
+与操作系统直接打交道的主要差异如下：
 
 | | Linux 版 | 本仓库（Windows 版） |
 | --- | --- | --- |
@@ -31,17 +31,26 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 | ffmpeg | 由 deb 声明依赖，装完即在 PATH | 自动探测 winget / Chocolatey / Scoop 等常见安装位置 |
 | 打包依赖 | `dpkg`、桌面图标与 `.desktop` | WiX Toolset v3（只打包 MSI 时需要） |
 
-除上表之外，功能、界面与本文档其余部分对两个平台同样适用。
+平台实现及已适配功能以本仓库为准；具体更新范围与未移植能力见 [上游更新对照](docs/UPSTREAM_SYNC.md)。
+
+## 1.14.0 更新范围与兼容性
+
+适配 Android 原版的 CC 字幕歌词、双语歌词、偏移微调及离线封面等更新，增加离线回归测试并修复同步、播放和下载安全问题。
+完整对照与验证方法见 [上游更新对照](docs/UPSTREAM_SYNC.md)。
+
+> **同步兼容性提醒**：本版本仍使用旧版备份通道，尚不支持原版当前的归档同步协议 3/4。
+> 如果远端存在 `neriplayer-sync-v3.manifest`，会停止同步以保护数据；请勿删除该文件绕过保护。
+> 不能把此版本视为已与最新 Android 原版完全同步。
 
 ## 下载与安装
 
-从本仓库的 [Releases](../../releases) 下载，三种形式任选：
+已发布版本可从本仓库的 [Releases](../../releases) 下载。1.14.0 当前为本地候选构建，以下为构建产物命名，并不表示已发布：
 
 | 文件 | 说明 |
 | --- | --- |
-| `NeriPlayer-1.13.1.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
-| `NeriPlayer-1.13.1.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.13.1.msi` |
-| `NeriPlayer-1.13.1-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
+| `NeriPlayer-1.14.0.exe` | **安装程序（推荐）**：双击即可安装，带卸载项、开始菜单快捷方式，可自选安装目录 |
+| `NeriPlayer-1.14.0.msi` | MSI 安装包：适合批量分发或静默安装，`msiexec /i NeriPlayer-1.14.0.msi` |
+| `NeriPlayer-1.14.0-windows-portable.zip` | **免安装版**：解压后双击目录里的 `NeriPlayer.exe` 直接运行 |
 
 安装完成后从开始菜单启动「NeriPlayer」。
 
@@ -52,10 +61,9 @@ Kotlin 源码、Material 3 主题、页面与交互与 Linux 版**完全同源**
 - **免安装版（portable）**：`gradlew createDistributable` 会产出
   `build\compose\binaries\main\app\NeriPlayer\`，里面是自带运行时的完整应用目录 —— 整个目录拷到哪都能跑
   （双击其中的 `NeriPlayer.exe`）。打成 zip 分发即可，不写注册表，删掉目录就等于卸载。
-  仓库自带的 CI 配置 `ci/windows-build.yml` 每次构建都会把这个目录打成
+  仓库自带的 CI 配置 `.github/workflows/windows-build.yml` 每次构建都会把这个目录打成
   `NeriPlayer-windows-portable.zip` 作为构建工件上传。
-  它是标准的 GitHub Actions 工作流，启用方式：把该文件移动到 `.github/workflows/windows-build.yml`
-  并提交（注意推送所用的 Personal Access Token 需要带 `workflow` scope，否则 GitHub 会拒绝这次提交）。
+  提交后 GitHub Actions 自动运行离线回归测试并构建便携版。
 - **安装包元数据保持英文**：`description` / `vendor` 交给 jpackage 时会写进它的参数文件，
   而 jpackage 读参数文件用的是系统默认字符集（JDK 17 在中文 Windows 上是 GBK），
   写中文会乱码并让 jpackage 以 `Input length = 1` 直接失败 —— 所以「程序和功能」里显示的是英文描述，
@@ -442,8 +450,8 @@ Windows 把「漫游配置」和「本机数据」分成两棵树，本应用同
 ```powershell
 gradlew run                    # 直接运行
 gradlew createDistributable    # 免安装应用目录：build\compose\binaries\main\app\NeriPlayer\
-gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.13.1.msi
-gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.13.1.exe
+gradlew packageMsi             # MSI：build\compose\binaries\main\msi\NeriPlayer-1.14.0.msi
+gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\exe\NeriPlayer-1.14.0.exe
 ```
 
 - `gradlew` 是批处理包装脚本，在 CMD / PowerShell 里直接写 `gradlew`（或 `.\gradlew.bat`）；
@@ -463,6 +471,7 @@ gradlew packageExe             # EXE 安装程序：build\compose\binaries\main\
 ### 测试
 
 ```powershell
+gradlew check                         # 离线回归测试（不使用真实账号、不创建远端仓库）
 gradlew selfTest                      # 核心自检：解码 / 播放 / 跳转 / 变速 / 歌词 / 在线接口 / 同步与悬浮歌词算法
 gradlew syncE2E -DGH_TOKEN=xxx        # GitHub 同步真实端到端（会创建并自动删除一个临时私有仓库）
 gradlew syncE2E -DGH_MOCK_BASE=http://127.0.0.1:8765   # 不连云端的 GitHub API 模拟服务，无需 Token
